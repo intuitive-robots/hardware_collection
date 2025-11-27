@@ -11,7 +11,7 @@ class ZEDCamera(AbstractCamera):
 
     def __init__(self, device_path, port):
         self.device_path = device_path
-        super().__init__(address=f"tcp://*:{port}")
+        super().__init__(publish_address=f"tcp://*:{port}")
         self.initialize()
 
     def initialize(self):

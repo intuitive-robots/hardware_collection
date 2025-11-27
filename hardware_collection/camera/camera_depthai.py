@@ -27,7 +27,7 @@ class DepthAICamera(AbstractCamera):
     ):
         self.camera_type = camera_type
         self.device_id = device_id
-        super().__init__(address=f"tcp://*:{port}")
+        super().__init__(publish_address=f"tcp://*:{port}")
         self.initialize()
 
     def initialize(self) -> None:

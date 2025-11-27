@@ -1,0 +1,10 @@
+# configs/config.yaml
+data_dir: ./records               # 数据保存目录
+robot_name: franka                # 机器人名称标签
+state_pub_addr: tcp://127.0.0.1:5555  # 机器人状态发布者地址
+capture_interval: 0.0             # 0 表示按按键触发；>0 为定时采样秒数
+
+camera_streams:
+  zed_left:
+    address: tcp://127.0.0.1:6000    # 对应 ZED 发布端口
+    recv_timeout_ms: 1000            # 可选：接收超时

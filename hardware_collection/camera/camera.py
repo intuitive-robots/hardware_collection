@@ -2,7 +2,7 @@ from __future__ import annotations
 import abc
 import time
 import struct
-from typing import ClassVar, List
+from typing import ClassVar, List, Optional
 from dataclasses import dataclass, field
 import cv2
 import numpy as np
@@ -98,14 +98,14 @@ class CameraFrame:
 class AbstractCamera(AbstractHardware):
     """Camera hardware component."""
 
-    def __init__(self, address: str, show_preview: bool = False) -> None:
+    def __init__(self, publish_address: str, show_preview: bool = False) -> None:
         """Initialize the camera hardware component.
 
         Args:
-            address (str): The address to connect the ZeroMQ socket to.
+            publish_address (str): Address to bind the PUB ZeroMQ socket for frame streaming.
             show_preview (bool): Whether to show a preview of the captured images.
         """
-        super().__init__(address=address)
+        super().__init__(publish_address=publish_address)
         self.width = None
         self.height = None
         self.show_preview = show_preview
@@ -114,13 +114,14 @@ class AbstractCamera(AbstractHardware):
     def initialize(self) -> None:
         raise NotImplementedError("Subclasses must implement initialize method.")
 
-    def publish_image(self, frame: CameraFrame) -> None:
+    def publish_image(self, frame: Optional[CameraFrame] = None) -> None:
         """Publish the captured image frame over ZeroMQ.
 
         Args:
             frame (CameraFrame): The captured image frame.
         """
-        frame = self.capture_image()
+        if frame is None:
+            frame = self.capture_image()
         self.pub_socket.send_multipart(frame.to_bytes())
         if self.show_preview:
             img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)

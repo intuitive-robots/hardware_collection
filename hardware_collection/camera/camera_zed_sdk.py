@@ -35,6 +35,7 @@ class ZED(AbstractCamera):
         fps: int = 30,
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
+        publish_address: Optional[str] = None,
     ) -> None:
         self.device_id = str(device_id)
         self.name = name or f"ZED_{self.device_id}"
@@ -47,10 +48,10 @@ class ZED(AbstractCamera):
         self.depth = None
         self.latest_depth: Optional[np.ndarray] = None
         self.frame_id = 0
-        super().__init__(address=f"tcp://*:{port}", show_preview=show_preview)
+        self.publish_address = publish_address or f"tcp://*:{port}"
+        super().__init__(publish_address=self.publish_address, show_preview=show_preview)
         self.width = width
         self.height = height
-        self._socket_closed = False
         self.initialize()
 
     @staticmethod
@@ -156,10 +157,7 @@ class ZED(AbstractCamera):
         if self.zed is not None:
             self.zed.close()
             self.zed = None
-        # Ensure the ZeroMQ socket is released when shutting down the camera.
-        if not self._socket_closed:
-            self.pub_socket.close(0)
-            self._socket_closed = True
+        self.close_sockets()
 
     @staticmethod
     def get_devices(
@@ -218,4 +216,3 @@ if __name__ == "__main__":
             )
     finally:
         camera.close()
-
