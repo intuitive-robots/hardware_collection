@@ -1,8 +1,10 @@
 import struct
 import shutil
 import time
+import threading
 from datetime import datetime
 from pathlib import Path
+from queue import Queue, Empty, Full
 from typing import Optional, NamedTuple, List
 
 import cv2
@@ -240,6 +242,11 @@ class DataCollectionManager:
         self.data_dir = data_dir
         self.data_dir.mkdir(exist_ok=True)
 
+        self._writer_queue: Queue = Queue(maxsize=256)
+        self._writer_stop = threading.Event()
+        self._writer_thread = threading.Thread(target=self.__writer_loop, daemon=True)
+        self._writer_thread.start()
+
         self.camera_dirs: List[Path] = []
         self.camera_names: List[str] = []
         self.camera_timestamps: List[list[float]] = []
@@ -348,11 +355,15 @@ class DataCollectionManager:
             image_rgb = frame.image_data
             image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
             frame_path = camera_dir / f"{self.cur_timestep:06d}.png"
-            cv2.imwrite(str(frame_path), image_bgr)
-
             header_path = frame_path.with_suffix(".header")
-            with open(header_path, "wb") as header_file:
-                header_file.write(frame.header.to_bytes())
+
+            try:
+                self._writer_queue.put_nowait(
+                    (frame_path, header_path, image_bgr, frame.header.to_bytes(), self.camera_names[idx], self.cur_timestep)
+                )
+            except Full:
+                print(f"Camera '{self.camera_names[idx]}' writer queue full, dropping frame {self.cur_timestep}")
+                continue
 
             self.camera_timestamps[idx].append(frame.header.timestamp)
 
@@ -372,6 +383,9 @@ class DataCollectionManager:
             self.cur_timestep += 1
 
     def __save_data(self):
+
+        # Ensure all enqueued frames are written before finalizing save
+        self._writer_queue.join()
 
         timestamps_path = self.record_dir / "timestamps.pt"
         torch.save(torch.tensor(self.timestamps, dtype=torch.float64), timestamps_path)
@@ -414,6 +428,23 @@ class DataCollectionManager:
             fps = len(timestamps) / span
             print(f"Camera '{name}' frame rate: {fps:.2f} Hz")
 
+    def __writer_loop(self) -> None:
+        """Background worker to write images and headers without blocking capture."""
+        while not self._writer_stop.is_set() or not self._writer_queue.empty():
+            try:
+                frame_path, header_path, image_bgr, header_bytes, cam_name, step = self._writer_queue.get(timeout=0.1)
+            except Empty:
+                continue
+
+            try:
+                cv2.imwrite(str(frame_path), image_bgr)
+                with open(header_path, "wb") as header_file:
+                    header_file.write(header_bytes)
+            except Exception as exc:
+                print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
+            finally:
+                self._writer_queue.task_done()
+
     def __close_hardware_connections(self):
         self.robot.close()
 
@@ -422,6 +453,9 @@ class DataCollectionManager:
                 camera.close()
             except Exception as exc:
                 print(f"Failed to close camera stream {camera.name}: {exc}")
+
+        self._writer_stop.set()
+        self._writer_thread.join(timeout=2.0)
 
 
 @hydra.main(version_base=None, config_path="./configs")
