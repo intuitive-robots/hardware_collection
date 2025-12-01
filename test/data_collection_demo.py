@@ -379,6 +379,7 @@ class DataCollectionManager:
         self.robot_data.save(self.robot_dir)
 
         self.__save_camera_metadata()
+        self.__report_camera_rates()
 
         # determine average frame rate from timestamps
         if len(self.timestamps) > 1:
@@ -397,6 +398,21 @@ class DataCollectionManager:
             ts_path = camera_dir / "timestamps.pt"
             torch.save(torch.tensor(timestamps, dtype=torch.float64), ts_path)
             print(f"Successfully saved '{ts_path}'")
+
+    def __report_camera_rates(self) -> None:
+        """Report average frame rate for each camera based on captured timestamps."""
+        for name, timestamps in zip(self.camera_names, self.camera_timestamps):
+            if len(timestamps) <= 1:
+                print(f"Camera '{name}' frame rate: insufficient samples ({len(timestamps)})")
+                continue
+
+            span = timestamps[-1] - timestamps[0]
+            if span <= 0:
+                print(f"Camera '{name}' frame rate: invalid timestamp span")
+                continue
+
+            fps = len(timestamps) / span
+            print(f"Camera '{name}' frame rate: {fps:.2f} Hz")
 
     def __close_hardware_connections(self):
         self.robot.close()
