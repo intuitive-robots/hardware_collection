@@ -1,0 +1,14 @@
+data_dir: ./records
+robot_name: franka
+state_pub_addr: tcp://10.10.10.11:5555
+capture_interval: 0.05
+camera_streams:
+  zed_left:
+    address: tcp://127.0.0.1:6000
+    recv_timeout_ms: 1000
+  zed_right:
+    address: tcp://127.0.0.1:6001
+    recv_timeout_ms: 1000
+  zed_wrist:
+    address: tcp://127.0.0.1:6002
+    recv_timeout_ms: 1000

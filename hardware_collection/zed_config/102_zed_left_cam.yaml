@@ -1,0 +1,9 @@
+#left camera config
+device_id: "30414018"
+depth_mode: "NEURAL_LIGHT"
+publish_port: 6000
+width: 672 #1280
+height: 376 #720
+fps: 60
+show_preview: false
+log_interval: 10

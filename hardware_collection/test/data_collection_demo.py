@@ -68,25 +68,28 @@ class Robot:
         end = offset + count * 8
         values = struct.unpack_from(f"<{count}d", payload, offset)
         return torch.tensor(values, dtype=torch.float64), end
-
     def _decode_state(self, payload: bytes) -> RobotState:
+        STRUCT = struct.Struct("!I16d16d7d7d7d7d7d6d6d")
         if len(payload) != self.STATE_BYTES:
             raise ValueError(f"Expected {self.STATE_BYTES} bytes, got {len(payload)}")
+        # print("payload len:",len(payload))
+        # print("payload:",payload)
+        unpacked = STRUCT.unpack(payload)
 
-        view = memoryview(payload)
         offset = 0
-        (timestamp_ms,) = struct.unpack_from("<I", view, offset)
-        offset += 4
 
-        O_T_EE, offset = self._read_doubles(view, offset, 16)
-        O_T_EE_d, offset = self._read_doubles(view, offset, 16)
-        q, offset = self._read_doubles(view, offset, 7)
-        q_d, offset = self._read_doubles(view, offset, 7)
-        dq, offset = self._read_doubles(view, offset, 7)
-        dq_d, offset = self._read_doubles(view, offset, 7)
-        tau_ext_hat_filtered, offset = self._read_doubles(view, offset, 7)
-        O_F_ext_hat_K, offset = self._read_doubles(view, offset, 6)
-        K_F_ext_hat_K, offset = self._read_doubles(view, offset, 6)
+        timestamp_ms = unpacked[offset]
+        offset += 1
+
+        O_T_EE = torch.tensor(unpacked[offset : offset + 16])
+        O_T_EE_d = torch.tensor(unpacked[offset + 16 : offset + 32])
+        q = torch.tensor(unpacked[offset + 32 : offset + 39])
+        q_d = torch.tensor(unpacked[offset + 39 : offset + 46])
+        dq = torch.tensor(unpacked[offset + 46 : offset + 53])
+        dq_d = torch.tensor(unpacked[offset + 53 : offset + 60])
+        tau_ext_hat_filtered = torch.tensor(unpacked[offset + 60 : offset + 67])
+        O_F_ext_hat_K = torch.tensor(unpacked[offset + 67 : offset + 73])
+        K_F_ext_hat_K = torch.tensor(unpacked[offset + 73 : offset + 79])
 
         return RobotState(
             timestamp_ms=timestamp_ms,
@@ -104,13 +107,12 @@ class Robot:
     def receive_state(self) -> Optional[RobotState]:
         if self.socket is None:
             raise RuntimeError("Robot socket is not connected. Call connect() first.")
-
         try:
             # Publisher sends a single-frame message at a fixed rate; use recv for clarity
             payload = self.socket.recv()
         except zmq.error.Again:
             return None
-
+        # print("Received payload of length:", len(payload))
         return self._decode_state(payload)
 
 
@@ -233,6 +235,7 @@ class DataCollectionManager:
         robot: Robot,
         data_dir: Path,
         camera_streams: Optional[List[RemoteCameraStream]] = None,
+        
         capture_interval: float = 0.0,
     ):
         self.robot = robot
@@ -242,7 +245,7 @@ class DataCollectionManager:
         self.data_dir = data_dir
         self.data_dir.mkdir(exist_ok=True)
 
-        self._writer_queue: Queue = Queue(maxsize=256)
+        self._writer_queue: Queue = Queue(maxsize=4096)
         self._writer_stop = threading.Event()
         self._writer_thread = threading.Thread(target=self.__writer_loop, daemon=True)
         self._writer_thread.start()
@@ -250,6 +253,7 @@ class DataCollectionManager:
         self.camera_dirs: List[Path] = []
         self.camera_names: List[str] = []
         self.camera_timestamps: List[list[float]] = []
+        self.camera_frame_idx = [0] * len(self.camera_streams)
         self.timestamps = []
         self.cur_timestep = 0
         self.capture_interval = capture_interval
@@ -297,7 +301,10 @@ class DataCollectionManager:
                             print("Saved!")
                         elif key == "d":
                             print("Discarding data ...")
-
+                            self._writer_stop.set()
+                            self._writer_queue.join()
+                            self._writer_thread.join(timeout=2.0)
+                            print("Writer thread stopped.")
                             shutil.rmtree(self.record_dir)
 
                             print("Discarded!")
@@ -345,16 +352,18 @@ class DataCollectionManager:
     def __capture_camera_frames(self) -> None:
         if not self.camera_streams:
             return
-
+        
         for idx, stream in enumerate(self.camera_streams):
             camera_dir = self.camera_dirs[idx]
             frame = stream.receive_latest_frame()
             if frame is None:
                 continue
+            frame_idx = self.camera_frame_idx[idx]
+            self.camera_frame_idx[idx] += 1
 
             image_rgb = frame.image_data
             image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
-            frame_path = camera_dir / f"{self.cur_timestep:06d}.png"
+            frame_path = camera_dir / f"{frame_idx:06d}.png"
             header_path = frame_path.with_suffix(".header")
 
             try:
@@ -369,6 +378,7 @@ class DataCollectionManager:
 
     def __collection_step(self):
         state = self.robot.receive_state()
+        # print("Received robot state:", state)
         if state is None:
             return
 
@@ -409,9 +419,9 @@ class DataCollectionManager:
                 print(f"No frames captured for camera '{name}', skipping timestamp save.")
                 continue
 
-            ts_path = camera_dir / "timestamps.pt"
-            torch.save(torch.tensor(timestamps, dtype=torch.float64), ts_path)
-            print(f"Successfully saved '{ts_path}'")
+            # ts_path = camera_dir / "timestamps.pt"
+            # torch.save(torch.tensor(timestamps, dtype=torch.float64), ts_path)
+            # print(f"Successfully saved '{ts_path}'")
 
     def __report_camera_rates(self) -> None:
         """Report average frame rate for each camera based on captured timestamps."""
@@ -438,8 +448,8 @@ class DataCollectionManager:
 
             try:
                 cv2.imwrite(str(frame_path), image_bgr)
-                with open(header_path, "wb") as header_file:
-                    header_file.write(header_bytes)
+                # with open(header_path, "wb") as header_file:
+                    # header_file.write(header_bytes)
             except Exception as exc:
                 print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
             finally:
@@ -481,8 +491,7 @@ def main(cfg: DictConfig):
     state_pub_addr = cfg.get("state_pub_addr", "tcp://127.0.0.1:5555")
     robot_name = cfg.get("robot_name", "franka")
     robot = Robot(name=robot_name, state_pub_addr=state_pub_addr)
-
-    # Start data collection
+    robot.connect()
     data_collection_manager = DataCollectionManager(
         robot=robot,
         data_dir=Path(cfg.data_dir),

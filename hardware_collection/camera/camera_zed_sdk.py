@@ -71,7 +71,14 @@ class ZED(AbstractCamera):
         self._sl = self._load_sdk()
         self.zed = self._sl.Camera()
         init_params = self._sl.InitParameters()
-        init_params.camera_serial_number = int(self.device_id)
+        # init_params.camera_serial_number = int(self.device_id)
+        input_type = self._sl.InputType()
+        input_type.set_from_serial_number(int(self.device_id))
+        init_params.open_timeout_sec = 60.0  # Gibt dem USB-Bus Zeit (WICHTIG!)
+        init_params.sdk_verbose = 1          # Zeigt Logs im Terminal, falls es hängt
+        init_params.async_grab_camera_recovery = True # Versucht Frame-Recovery bei USB-Hickups
+
+        init_params.input = input_type
         init_params.camera_fps = self.fps
         init_params.depth_mode = self._get_depth_mode()
         init_params.coordinate_units = self._sl.UNIT.MILLIMETER
@@ -116,9 +123,15 @@ class ZED(AbstractCamera):
             raise RuntimeError(f"Failed to grab frame from ZED camera {self.device_id}")
 
         timestamp = time.time()
-        self.zed.retrieve_image(self.image, self.sl.VIEW.LEFT)#bgra
+        self.zed.retrieve_image(self.image, self._sl.VIEW.LEFT)  # bgra
         bgr = self.image.get_data()[:, :, :3]  # Remove alpha channel if present
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+        # Convert BGR to RGB for preview
+        if self.show_preview:
+            preview_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+            cv2.imshow("ZED Preview", preview_bgr)
+            cv2.waitKey(1)
 
         self.zed.retrieve_measure(self.depth, self._sl.MEASURE.DEPTH)
         self.latest_depth = self.depth.get_data().copy()

@@ -2,7 +2,7 @@
 data_dir: ./records               
 robot_name: franka               
 state_pub_addr: tcp://10.10.10.11:5555 
-capture_interval: 0.001             
+capture_interval: 0.03           
 
 camera_streams:
   zed_left:

@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from ..core.abstract_hardware import AbstractHardware
+from hardware_collection.core.abstract_hardware import AbstractHardware
 
 
 @dataclass
@@ -123,11 +123,11 @@ class AbstractCamera(AbstractHardware):
         if frame is None:
             frame = self.capture_image()
         self.pub_socket.send_multipart(frame.to_bytes())
-        if self.show_preview:
-            img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)
-            img = img_array.reshape((frame.header.height, frame.header.width, frame.header.channels))
-            cv2.imshow("Camera Preview", img)
-            cv2.waitKey(1)
+        # if self.show_preview:
+        #     img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)
+        #     img = img_array.reshape((frame.header.height, frame.header.width, frame.header.channels))
+        #     cv2.imshow("Camera Preview", img)
+        #     cv2.waitKey(1)
 
     @abc.abstractmethod
     def capture_image(self) -> CameraFrame:
