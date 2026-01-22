@@ -11,7 +11,7 @@ import cv2
 import hydra
 import numpy as np
 import torch
-import zmq
+import pyzlc
 from omegaconf import DictConfig
 
 from hardware_collection.camera.camera import CameraFrame, CameraHeader
@@ -32,48 +32,57 @@ class RobotState(NamedTuple):
 
 
 class Robot:
-    """Subscribe to the state publisher from RobotControlProxy and decode frames."""
+    """Subscribe to robot state via ZeroLanCom."""
 
     STATE_BYTES = 636  # expected payload length from the provided C++ encoder
 
     def __init__(
         self,
         name: str,
-        state_pub_addr: str = "tcp://127.0.0.1:5555",
+        state_topic: str = "robot_state",
         recv_timeout_ms: int = 1000,
     ):
         self.name = name
-        self.state_pub_addr = state_pub_addr
+        self.state_topic = state_topic
         self.recv_timeout_ms = recv_timeout_ms
-        self.ctx = zmq.Context.instance()
-        self.socket: Optional[zmq.Socket] = None
+        self.latest_state: Optional[bytes] = None
 
     def connect(self) -> None:
-        if self.socket is not None:
-            return
+        """Register subscriber for robot state."""
+        try:
+            pyzlc.register_subscriber_handler(
+                self.state_topic, self._handle_state
+            )
+            print(f"Connected to robot state topic '{self.state_topic}' via ZeroLanCom")
+        except Exception as e:
+            print(f"Warning: Failed to connect to robot state: {e}")
 
-        sock = self.ctx.socket(zmq.SUB)
-        sock.setsockopt(zmq.SUBSCRIBE, b"")
-        sock.setsockopt(zmq.RCVTIMEO, self.recv_timeout_ms)
-        sock.connect(self.state_pub_addr)
-        self.socket = sock
-        print(f"Connected to robot state publisher at {self.state_pub_addr}")
+    def _handle_state(self, msg: bytes) -> None:
+        """Handle incoming state data."""
+        try:
+            if isinstance(msg, bytes):
+                self.latest_state = msg
+            else:
+                # Handle string data if needed
+                if isinstance(msg, str):
+                    self.latest_state = msg.encode('utf-8')
+        except Exception as e:
+            print(f"Failed to process robot state: {e}")
 
     def close(self) -> None:
-        if self.socket is not None:
-            self.socket.close(0)
-            self.socket = None
+        """Close connection."""
+        self.latest_state = None
 
     def _read_doubles(self, payload: memoryview, offset: int, count: int):
         end = offset + count * 8
         values = struct.unpack_from(f"<{count}d", payload, offset)
         return torch.tensor(values, dtype=torch.float64), end
+
     def _decode_state(self, payload: bytes) -> RobotState:
         STRUCT = struct.Struct("!I16d16d7d7d7d7d7d6d6d")
         if len(payload) != self.STATE_BYTES:
             raise ValueError(f"Expected {self.STATE_BYTES} bytes, got {len(payload)}")
-        # print("payload len:",len(payload))
-        # print("payload:",payload)
+        
         unpacked = STRUCT.unpack(payload)
 
         offset = 0
@@ -105,15 +114,15 @@ class Robot:
         )
 
     def receive_state(self) -> Optional[RobotState]:
-        if self.socket is None:
-            raise RuntimeError("Robot socket is not connected. Call connect() first.")
-        try:
-            # Publisher sends a single-frame message at a fixed rate; use recv for clarity
-            payload = self.socket.recv()
-        except zmq.error.Again:
+        """Receive latest robot state if available."""
+        if self.latest_state is None:
             return None
-        # print("Received payload of length:", len(payload))
-        return self._decode_state(payload)
+        
+        try:
+            return self._decode_state(self.latest_state)
+        except Exception as e:
+            print(f"Failed to decode robot state: {e}")
+            return None
 
 
 class CollectionData:
@@ -171,56 +180,42 @@ class CollectionData:
 
 
 class RemoteCameraStream:
-    """Subscribe to CameraFrame data from a ZeroMQ PUB publisher."""
+    """Subscribe to camera frames via ZeroLanCom."""
 
-    def __init__(self, name: str, address: str, recv_timeout_ms: int = 1000) -> None:
+    def __init__(self, name: str, topic: str, recv_timeout_ms: int = 1000) -> None:
         self.name = name
-        self.address = address
+        self.topic = topic
         self.recv_timeout_ms = recv_timeout_ms
-        self.ctx = zmq.Context.instance()
-        self.socket = self.ctx.socket(zmq.SUB)
-        self.socket.setsockopt(zmq.SUBSCRIBE, b"")
-        self.socket.setsockopt(zmq.RCVTIMEO, recv_timeout_ms)
-        self.socket.connect(address)
+        self.latest_frame: Optional[CameraFrame] = None
+
+    def connect(self) -> None:
+        """Register subscriber for camera frames."""
+        try:
+            pyzlc.register_subscriber_handler(
+                self.topic, self._handle_frame
+            )
+            print(f"Connected to camera stream '{self.name}' on topic '{self.topic}'")
+        except Exception as e:
+            print(f"Warning: Failed to connect to camera stream '{self.name}': {e}")
+
+    def _handle_frame(self, msg: bytes) -> None:
+        """Handle incoming frame data."""
+        try:
+            self.latest_frame = CameraFrame.from_bytes(msg)
+        except Exception as e:
+            print(f"Camera '{self.name}' frame decode error: {e}")
 
     def close(self) -> None:
-        self.socket.close(0)
+        """Close the subscriber connection."""
+        pass
 
     def receive_latest_frame(self) -> Optional[CameraFrame]:
-        frame: Optional[CameraFrame] = None
-
-        while True:
-            try:
-                parts = self.socket.recv_multipart(flags=zmq.NOBLOCK)
-            except zmq.Again:
-                break
-            except zmq.ZMQError as exc:
-                print(f"Camera '{self.name}' socket error: {exc}")
-                break
-
-            if len(parts) != 2:
-                print(f"Camera '{self.name}' sent unexpected multipart message with {len(parts)} parts")
-                continue
-
-            header_bytes, image_bytes = parts
-            try:
-                header = CameraHeader.from_bytes(header_bytes)
-            except struct.error as exc:
-                print(f"Camera '{self.name}' header decode error: {exc}")
-                continue
-
-            image_flat = np.frombuffer(image_bytes, dtype=np.uint8)
-            expected = header.width * header.height * header.channels
-            if image_flat.size != expected:
-                print(
-                    f"Camera '{self.name}' frame size mismatch "
-                    f"(expected {expected} bytes, got {image_flat.size})"
-                )
-                continue
-
-            image = image_flat.reshape((header.height, header.width, header.channels)).copy()
-            frame = CameraFrame(header=header, image_data=image)
-
+        """Get the latest frame if available."""
+        if self.latest_frame is None:
+            return None
+        
+        frame = self.latest_frame
+        self.latest_frame = None  # Clear after retrieval
         return frame
 
 
@@ -242,6 +237,11 @@ class DataCollectionManager:
         self.robot.connect()
 
         self.camera_streams: List[RemoteCameraStream] = camera_streams or []
+        
+        # Connect all camera streams
+        for camera in self.camera_streams:
+            camera.connect()
+        
         self.data_dir = data_dir
         self.data_dir.mkdir(exist_ok=True)
 
@@ -475,22 +475,22 @@ def main(cfg: DictConfig):
     camera_streams: List[RemoteCameraStream] = []
     if camera_cfg:
         for name, cam_cfg in camera_cfg.items():
-            address = cam_cfg.get("address")
-            if not address:
-                print(f"Camera '{name}' is missing an 'address' entry in the config, skipping.")
+            topic = cam_cfg.get("topic")
+            if not topic:
+                print(f"Camera '{name}' is missing a 'topic' entry in the config, skipping.")
                 continue
             recv_timeout = cam_cfg.get("recv_timeout_ms", 1000)
             camera_streams.append(
                 RemoteCameraStream(
                     name=name,
-                    address=address,
+                    topic=topic,
                     recv_timeout_ms=recv_timeout,
                 )
             )
 
-    state_pub_addr = cfg.get("state_pub_addr", "tcp://127.0.0.1:5555")
+    state_topic = cfg.get("state_topic", "robot_state")
     robot_name = cfg.get("robot_name", "franka")
-    robot = Robot(name=robot_name, state_pub_addr=state_pub_addr)
+    robot = Robot(name=robot_name, state_topic=state_topic)
     robot.connect()
     data_collection_manager = DataCollectionManager(
         robot=robot,

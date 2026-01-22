@@ -1,4 +1,4 @@
-"""ZED camera publisher that streams frames over ZeroMQ."""
+"""ZED camera publisher that streams frames over ZeroLanCom."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Stream ZED frames over ZeroMQ")
+    parser = argparse.ArgumentParser(description="Stream ZED frames over ZeroLanCom")
     parser.add_argument(
         "--config",
         type=str,
@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         help="Path to YAML config file",
     )
     parser.add_argument("--device-id", help="Serial number of the ZED camera")
-    parser.add_argument("--publish-port", type=int, help="TCP port to publish frames")
+    parser.add_argument("--publish-topic", help="ZeroLanCom topic to publish frames to")
     parser.add_argument("--width", type=int, help="Frame width")
     parser.add_argument("--height", type=int, help="Frame height")
     parser.add_argument("--fps", type=int, help="Target capture FPS")
@@ -68,7 +68,7 @@ def load_config(path: str) -> Dict[str, Any]:
 
 def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
     defaults = {
-        "publish_port": 6000,
+        "publish_topic": "zed_camera",
         "width": 1280,
         "height": 720,
         "fps": 30,
@@ -107,8 +107,8 @@ def main() -> int:
 
     cfg = resolve_config(args)
 
-    publish_address = f"tcp://*:{cfg['publish_port']}"
-    logger.info("Starting ZED publisher on %s", publish_address)
+    publish_topic = cfg["publish_topic"]
+    logger.info("Starting ZED publisher on ZeroLanCom topic '%s'", publish_topic)
 
     camera = ZEDCamera(
         device_id=str(cfg["device_id"]),
@@ -117,7 +117,7 @@ def main() -> int:
         fps=cfg["fps"],
         depth_mode=str(cfg["depth_mode"]),
         show_preview=bool(cfg["show_preview"]),
-        publish_address=publish_address,
+        publish_topic=publish_topic,
     )
 
     killer = GracefulKiller()

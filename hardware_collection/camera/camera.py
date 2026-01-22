@@ -84,28 +84,37 @@ class CameraFrame:
         self.image_bytes = image_data.tobytes()
 
     def to_bytes(self) -> List[bytes]:
+        """Legacy method for ZMQ compatibility (multipart)."""
         return [self.header.to_bytes(), self.image_bytes]
+
+    def to_bytes_combined(self) -> bytes:
+        """Combine header and image into single binary payload for pyzlc."""
+        header_bytes = self.header.to_bytes()
+        return header_bytes + self.image_bytes
 
     @staticmethod
     def from_bytes(data: bytes):
+        """Reconstruct frame from combined binary data."""
         header_size = struct.calcsize(CameraHeader.STRUCT_FORMAT)
         header = CameraHeader.from_bytes(data[:header_size])
         image_bytes = data[header_size:]
-        image_data = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+        image_data = np.frombuffer(image_bytes, dtype=np.uint8).reshape(
+            (header.height, header.width, header.channels)
+        )
         return CameraFrame(header, image_data)
 
 
 class AbstractCamera(AbstractHardware):
     """Camera hardware component."""
 
-    def __init__(self, publish_address: str, show_preview: bool = False) -> None:
+    def __init__(self, publish_topic: str, show_preview: bool = False) -> None:
         """Initialize the camera hardware component.
 
         Args:
-            publish_address (str): Address to bind the PUB ZeroMQ socket for frame streaming.
+            publish_topic (str): Topic name to publish frame data via ZeroLanCom.
             show_preview (bool): Whether to show a preview of the captured images.
         """
-        super().__init__(publish_address=publish_address)
+        super().__init__(publish_topic=publish_topic)
         self.width = None
         self.height = None
         self.show_preview = show_preview
@@ -115,19 +124,19 @@ class AbstractCamera(AbstractHardware):
         raise NotImplementedError("Subclasses must implement initialize method.")
 
     def publish_image(self, frame: Optional[CameraFrame] = None) -> None:
-        """Publish the captured image frame over ZeroMQ.
+        """Publish the captured image frame over ZeroLanCom as binary data.
 
         Args:
             frame (CameraFrame): The captured image frame.
         """
         if frame is None:
             frame = self.capture_image()
-        self.pub_socket.send_multipart(frame.to_bytes())
-        # if self.show_preview:
-        #     img_array = np.frombuffer(frame.image_bytes, dtype=np.uint8)
-        #     img = img_array.reshape((frame.header.height, frame.header.width, frame.header.channels))
-        #     cv2.imshow("Camera Preview", img)
-        #     cv2.waitKey(1)
+        
+        if self.publisher is not None:
+            try:
+                self.publisher.publish(frame.to_bytes_combined())
+            except Exception as e:
+                print(f"Warning: Failed to publish frame on topic '{self.publish_topic}': {e}")
 
     @abc.abstractmethod
     def capture_image(self) -> CameraFrame:

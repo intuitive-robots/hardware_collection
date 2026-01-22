@@ -1,26 +1,28 @@
-import zmq
 import abc
+from typing import Optional
+import pyzlc
 
 
 class AbstractHardware:
-    """Abstract base class for hardware components using ZeroMQ PUB sockets for communication."""
+    """Abstract base class for hardware components using ZeroLanCom Publisher."""
 
-    def __init__(self, publish_address: str):
-        """Initialize the hardware component with a PUB ZeroMQ socket.
+    def __init__(self, publish_topic: str):
+        """Initialize with pyzlc Publisher.
 
         Args:
-            publish_address (str): Address to bind the PUB socket for downstream subscribers.
+            publish_topic (str): Topic name to publish data via ZeroLanCom.
         """
-        self._ctx = zmq.Context.instance()
-
-        self.pub_socket = self._ctx.socket(zmq.PUB)
-        self.pub_socket.bind(publish_address)
+        self.publish_topic = publish_topic
+        self.publisher: Optional[pyzlc.Publisher] = None
+        
+        try:
+            self.publisher = pyzlc.Publisher(publish_topic)
+        except Exception as e:
+            print(f"Warning: Failed to create publisher for topic '{publish_topic}': {e}")
 
     def close_sockets(self) -> None:
-        """Close any allocated ZeroMQ sockets."""
-        if getattr(self, "pub_socket", None) is not None:
-            self.pub_socket.close(0)
-            self.pub_socket = None
+        """Close any allocated ZeroLanCom publishers."""
+        self.publisher = None
 
     @abc.abstractmethod
     def initialize(self) -> None:
