@@ -5,7 +5,7 @@ Basic sanity test for hardware_collection.camera.camera_zed_sdk.ZED.
 - Prints header info and checks depth retrieval
 
 Usage:
-    python test_zed.py --device-id 30414018 --port 7900 --width 1280 --height 720 --fps 30 --depth-mode PERFORMANCE
+    python test_zed.py --device-id 30414018 --width 1280 --height 720 --fps 30 --depth-mode PERFORMANCE
 
 Note: Requires ZED SDK + pyzed installed and an actual camera connected.
 """
@@ -19,11 +19,10 @@ from hardware_collection.camera.camera_zed_sdk import ZED
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("test_zed")
 
-#python test_zed.py --device-id 30414018 --port 7900 --width 1280 --height 720 --fps 30 --depth-mode PERFORMANCE --show-preview 
+#python test_zed.py --device-id 30414018 --width 1280 --height 720 --fps 30 --depth-mode PERFORMANCE --show-preview 
 def parse_args():
     parser = argparse.ArgumentParser(description="Basic ZED SDK camera sanity test")
     parser.add_argument("--device-id", required=True, help="Camera serial number")
-    parser.add_argument("--port", type=int, default=7900, help="Internal port used by SDK instance")
     parser.add_argument("--width", type=int, default=1280, help="Frame width")
     parser.add_argument("--height", type=int, default=720, help="Frame height")
     parser.add_argument("--fps", type=int, default=30, help="Target FPS")
@@ -43,7 +42,6 @@ def main():
     logger.info("Connecting to ZED (serial=%s)", args.device_id)
     cam = ZED(
         device_id=args.device_id,
-        port=args.port,
         width=args.width,
         height=args.height,
         fps=args.fps,

@@ -1,5 +1,5 @@
 device_id: "00000000"  # ZED device ID
-publish_port: 6000      # ZeroMQ PUB port exposed to subscribers
+publish_topic: zed_left  # ZeroLanCom topic
 width: 1280
 height: 720
 fps: 30

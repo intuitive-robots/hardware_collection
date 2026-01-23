@@ -3,6 +3,8 @@ data_dir: ./records
 robot_name: franka               
 state_topic: robot_state 
 capture_interval: 0.001             
+writer_pool_max_workers: 8
+writer_max_pending_writes: 4096
 
 camera_streams:
   zed_left:

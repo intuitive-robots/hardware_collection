@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class ZED(AbstractCamera):
-    """ZED camera that streams RGB frames over ZeroMQ using the ZED SDK."""
+    """ZED camera that streams RGB frames over ZeroLanCom using the ZED SDK."""
 
     _RESOLUTION_MAP = {
         (2208, 1242): "HD2K",

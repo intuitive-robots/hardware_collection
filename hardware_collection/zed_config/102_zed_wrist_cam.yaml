@@ -1,7 +1,7 @@
 #wrist camera config
 depth_mode: "NEURAL_LIGHT" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
 device_id: "11450270"
-publish_port: 6002
+publish_topic: zed_wrist
 width: 672 #1280 672
 height: 376 #720 376
 fps: 60

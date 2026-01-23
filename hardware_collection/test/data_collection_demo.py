@@ -1,9 +1,10 @@
 import shutil
 import time
-import threading
+import os
 from datetime import datetime
 from pathlib import Path
-from queue import Queue, Empty, Full
+from queue import Full #used to handle full queue exception
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Optional, NamedTuple, List
 
 import cv2
@@ -231,7 +232,8 @@ class DataCollectionManager:
         robot: Robot,
         data_dir: Path,
         camera_streams: Optional[List[RemoteCameraStream]] = None,
-        
+        writer_pool_max_workers: Optional[int] = None,
+        writer_max_pending_writes: int = 4096,
         capture_interval: float = 0.0,
     ):
         self.robot = robot
@@ -246,10 +248,13 @@ class DataCollectionManager:
         self.data_dir = data_dir
         self.data_dir.mkdir(exist_ok=True)
 
-        self._writer_queue: Queue = Queue(maxsize=4096)
-        self._writer_stop = threading.Event()
-        self._writer_thread = threading.Thread(target=self.__writer_loop, daemon=True)
-        self._writer_thread.start()
+        self._max_pending_writes = int(writer_max_pending_writes)
+        if writer_pool_max_workers is None:
+            max_workers = max(2, min(8, (os.cpu_count() or 4)))
+        else:
+            max_workers = max(1, int(writer_pool_max_workers))
+        self._writer_pool = ThreadPoolExecutor(max_workers=max_workers)
+        self._writer_futures = []
 
         self.camera_dirs: List[Path] = []
         self.camera_names: List[str] = []
@@ -302,10 +307,7 @@ class DataCollectionManager:
                             print("Saved!")
                         elif key == "d":
                             print("Discarding data ...")
-                            self._writer_stop.set()
-                            self._writer_queue.join()
-                            self._writer_thread.join(timeout=2.0)
-                            print("Writer thread stopped.")
+                            self.__flush_writes()
                             shutil.rmtree(self.record_dir)
 
                             print("Discarded!")
@@ -368,11 +370,18 @@ class DataCollectionManager:
             header_path = frame_path.with_suffix(".header")
 
             try:
-                self._writer_queue.put_nowait(
-                    (frame_path, header_path, image_bgr, frame.header.to_bytes(), self.camera_names[idx], self.cur_timestep)
+                self.__submit_frame_write(
+                    frame_path,
+                    header_path,
+                    image_bgr,
+                    frame.header.to_bytes(),
+                    self.camera_names[idx],
+                    self.cur_timestep,
                 )
             except Full:
-                print(f"Camera '{self.camera_names[idx]}' writer queue full, dropping frame {self.cur_timestep}")
+                print(
+                    f"Camera '{self.camera_names[idx]}' writer pool backlog full, dropping frame {self.cur_timestep}"
+                )
                 continue
 
             self.camera_timestamps[idx].append(frame.header.timestamp)
@@ -396,7 +405,7 @@ class DataCollectionManager:
     def __save_data(self):
 
         # Ensure all enqueued frames are written before finalizing save
-        self._writer_queue.join()
+        self.__flush_writes()
 
         timestamps_path = self.record_dir / "timestamps.pt"
         torch.save(torch.tensor(self.timestamps, dtype=torch.float64), timestamps_path)
@@ -439,22 +448,50 @@ class DataCollectionManager:
             fps = len(timestamps) / span
             print(f"Camera '{name}' frame rate: {fps:.2f} Hz")
 
-    def __writer_loop(self) -> None:
-        """Background worker to write images and headers without blocking capture."""
-        while not self._writer_stop.is_set() or not self._writer_queue.empty():
-            try:
-                frame_path, header_path, image_bgr, header_bytes, cam_name, step = self._writer_queue.get(timeout=0.1)
-            except Empty:
-                continue
+    def __submit_frame_write(
+        self,
+        frame_path: Path,
+        header_path: Path,
+        image_bgr: np.ndarray,
+        header_bytes: bytes,
+        cam_name: str,
+        step: int,
+    ) -> None:
+        self.__prune_completed_writes()
+        if len(self._writer_futures) >= self._max_pending_writes:
+            raise Full
 
-            try:
-                cv2.imwrite(str(frame_path), image_bgr)
-                # with open(header_path, "wb") as header_file:
-                    # header_file.write(header_bytes)
-            except Exception as exc:
-                print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
-            finally:
-                self._writer_queue.task_done()
+        future = self._writer_pool.submit(
+            self.__write_frame, frame_path, header_path, image_bgr, header_bytes, cam_name, step
+        )
+        self._writer_futures.append(future)
+
+    def __prune_completed_writes(self) -> None:
+        if not self._writer_futures:
+            return
+        self._writer_futures = [f for f in self._writer_futures if not f.done()]
+
+    def __flush_writes(self) -> None:
+        if not self._writer_futures:
+            return
+        wait(self._writer_futures)
+        self.__prune_completed_writes()
+
+    @staticmethod
+    def __write_frame(
+        frame_path: Path,
+        header_path: Path,
+        image_bgr: np.ndarray,
+        header_bytes: bytes,
+        cam_name: str,
+        step: int,
+    ) -> None:
+        try:
+            cv2.imwrite(str(frame_path), image_bgr)
+            # with open(header_path, "wb") as header_file:
+            #     header_file.write(header_bytes)
+        except Exception as exc:
+            print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
 
     def __close_hardware_connections(self):
         self.robot.close()
@@ -465,8 +502,8 @@ class DataCollectionManager:
             except Exception as exc:
                 print(f"Failed to close camera stream {camera.name}: {exc}")
 
-        self._writer_stop.set()
-        self._writer_thread.join(timeout=2.0)
+        self.__flush_writes()
+        self._writer_pool.shutdown(wait=True, cancel_futures=False)
 
 
 @hydra.main(version_base=None, config_path="./configs")
@@ -497,6 +534,8 @@ def main(cfg: DictConfig):
         robot=robot,
         data_dir=Path(cfg.data_dir),
         camera_streams=camera_streams,
+        writer_pool_max_workers=cfg.get("writer_pool_max_workers"),
+        writer_max_pending_writes=cfg.get("writer_max_pending_writes", 4096),
         capture_interval=cfg.get("capture_interval", 0.001),
     )
     data_collection_manager.start_key_listener()
