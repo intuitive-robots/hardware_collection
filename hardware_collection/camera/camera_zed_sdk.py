@@ -2,6 +2,8 @@
 import logging
 import time
 from typing import List, Optional
+from pathlib import Path
+import yaml
 
 import cv2
 import numpy as np
@@ -175,7 +177,9 @@ class ZED(AbstractCamera):
     @staticmethod
     def get_devices(
         amount: int = -1,
-        start_port: int = 5555,
+        topics: List[str] | None = None,
+        config_path: str = "configs/config.yaml",
+        topic_prefix: str = "zed",
         height: int = 720,
         width: int = 1280,
         **kwargs,
@@ -187,6 +191,9 @@ class ZED(AbstractCamera):
         ----------
         - `amount` (int): Maximum amount of instances to be found.
           Leaving out `amount` or `amount = -1` returns all instances.
+        - `topics` (List[str] | None): Optional topic names per device. If None, auto-load from config.
+        - `config_path` (str): Path to global config containing `camera_streams` with topics (default: configs/config.yaml).
+        - `topic_prefix` (str): Fallback prefix when generating topic names, if not found in config (default: "zed").
         - `height` (int): Pixel-height of captured frames. Default: `720`
         - `width` (int): Pixel-width of captured frames. Default: `1280`
         - `**kwargs`: Arbitrary keyword arguments.
@@ -202,16 +209,21 @@ class ZED(AbstractCamera):
                 "pyzed package not found. Please install the ZED SDK and pyzed package."
             )
             return []
+
+        # Attempt to load topic list from config if not explicitly provided.
+        if topics is None:
+            topics = ZED._load_topics_from_config(config_path=config_path, prefix=topic_prefix)
+
         cam_list = sl.Camera.get_device_list()
         devices: List[ZED] = []
         for idx, device in enumerate(cam_list):
             if amount != -1 and idx >= amount:
                 break
-            publish_address = f"tcp://*:{start_port + idx}"
+            topic = topics[idx] if topics and idx < len(topics) else f"{topic_prefix}_{idx}"
             devices.append(
                 ZED(
                     device_id=device.serial_number,
-                    publish_address=publish_address,
+                    publish_topic=topic,
                     height=height,
                     width=width,
                     **kwargs,
@@ -219,9 +231,35 @@ class ZED(AbstractCamera):
             )
         return devices
 
+    @staticmethod
+    def _load_topics_from_config(config_path: str = "configs/config.yaml", prefix: str = "zed") -> List[str]:
+        """Load camera topics from a YAML config's `camera_streams` section."""
+        cfg_path = Path(config_path)
+        if not cfg_path.is_file():
+            logger.warning("Config file %s not found; falling back to generated topics", cfg_path)
+            return []
+
+        try:
+            data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            logger.warning("Failed to read %s: %s", cfg_path, exc)
+            return []
+
+        streams = data.get("camera_streams", {})
+        topics: List[str] = []
+        for name, cfg in streams.items():
+            if prefix and not name.startswith(prefix):
+                continue
+            topic = cfg.get("topic")
+            if topic:
+                topics.append(topic)
+        if not topics:
+            logger.warning("No camera topics found in %s; using generated names", cfg_path)
+        return topics
+
 
 if __name__ == "__main__":
-    camera = ZED(device_id="30414018", publish_address="tcp://*:7777")
+    camera = ZED(device_id="30414018", publish_topic="zed_camera")
     try:
         for _ in range(10):
             frame = camera.capture_image()

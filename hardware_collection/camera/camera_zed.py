@@ -9,9 +9,9 @@ from .camera import AbstractCamera, CameraFrame, CameraHeader
 
 class ZEDCamera(AbstractCamera):
 
-    def __init__(self, device_path, port):
+    def __init__(self, device_path, publish_topic: str):
         self.device_path = device_path
-        super().__init__(publish_address=f"tcp://*:{port}")
+        super().__init__(publish_topic=publish_topic)
         self.initialize()
 
     def initialize(self):
@@ -39,7 +39,10 @@ class ZEDCamera(AbstractCamera):
         return CameraFrame(header=header, image_data=frame_rgb)
 
     @staticmethod
-    def get_devices(amount=-1, start_port: int = 7878) -> list[ZEDCamera]:
+    def get_devices(
+        amount: int = -1,
+        topics: list[str] | None = None,
+    ) -> list["ZEDCamera"]:
         """
         Automatically find ZED cameras using pyudev and return a list of ZEDCamera instances.
         """
@@ -64,7 +67,8 @@ class ZEDCamera(AbstractCamera):
         for devnode in zed_nodes:
             if amount != -1 and counter >= amount:
                 break
-            cams.append(ZEDCamera(device_path=devnode, port=start_port + counter))
+            topic = topics[counter] if topics and counter < len(topics) else f"zed_{counter}"
+            cams.append(ZEDCamera(device_path=devnode, publish_topic=topic))
             counter += 1
 
         return cams

@@ -1,4 +1,3 @@
-import struct
 import shutil
 import time
 import threading
@@ -9,9 +8,10 @@ from typing import Optional, NamedTuple, List
 
 import cv2
 import hydra
+import msgpack
 import numpy as np
-import torch
 import pyzlc
+import torch
 from omegaconf import DictConfig
 
 from hardware_collection.camera.camera import CameraFrame, CameraHeader
@@ -34,18 +34,17 @@ class RobotState(NamedTuple):
 class Robot:
     """Subscribe to robot state via ZeroLanCom."""
 
-    STATE_BYTES = 636  # expected payload length from the provided C++ encoder
-
     def __init__(
         self,
         name: str,
-        state_topic: str = "robot_state",
+        state_topic: Optional[str] = None,
         recv_timeout_ms: int = 1000,
     ):
         self.name = name
-        self.state_topic = state_topic
+        # FrankaControlProxy publishes on "<name>/franka_arm_state"
+        self.state_topic = state_topic or f"{name}/franka_arm_state"
         self.recv_timeout_ms = recv_timeout_ms
-        self.latest_state: Optional[bytes] = None
+        self.latest_state: Optional[bytes | dict] = None
 
     def connect(self) -> None:
         """Register subscriber for robot state."""
@@ -57,15 +56,13 @@ class Robot:
         except Exception as e:
             print(f"Warning: Failed to connect to robot state: {e}")
 
-    def _handle_state(self, msg: bytes) -> None:
-        """Handle incoming state data."""
+    def _handle_state(self, msg) -> None:
+        """Handle incoming state data (dict from msgpack or raw bytes)."""
         try:
-            if isinstance(msg, bytes):
-                self.latest_state = msg
+            if isinstance(msg, (bytes, bytearray)):
+                self.latest_state = bytes(msg)
             else:
-                # Handle string data if needed
-                if isinstance(msg, str):
-                    self.latest_state = msg.encode('utf-8')
+                self.latest_state = msg
         except Exception as e:
             print(f"Failed to process robot state: {e}")
 
@@ -73,44 +70,48 @@ class Robot:
         """Close connection."""
         self.latest_state = None
 
-    def _read_doubles(self, payload: memoryview, offset: int, count: int):
-        end = offset + count * 8
-        values = struct.unpack_from(f"<{count}d", payload, offset)
-        return torch.tensor(values, dtype=torch.float64), end
+    def _decode_state(self, payload) -> RobotState:
+        """
+        Decode FrankaControlProxy FrankaArmState published via pyzlc msgpack.
+        Expected keys: time_ms, O_T_EE, O_T_EE_d, q, q_d, dq, dq_d,
+        tau_ext_hat_filtered, O_F_ext_hat_K, K_F_ext_hat_K.
+        """
+        if isinstance(payload, (bytes, bytearray)):
+            data = msgpack.unpackb(payload, raw=False)
+        elif isinstance(payload, dict):
+            data = payload
+        else:
+            raise TypeError(f"Unsupported payload type: {type(payload)}")
 
-    def _decode_state(self, payload: bytes) -> RobotState:
-        STRUCT = struct.Struct("!I16d16d7d7d7d7d7d6d6d")
-        if len(payload) != self.STATE_BYTES:
-            raise ValueError(f"Expected {self.STATE_BYTES} bytes, got {len(payload)}")
-        
-        unpacked = STRUCT.unpack(payload)
+        required_keys = [
+            "time_ms",
+            "O_T_EE",
+            "O_T_EE_d",
+            "q",
+            "q_d",
+            "dq",
+            "dq_d",
+            "tau_ext_hat_filtered",
+            "O_F_ext_hat_K",
+            "K_F_ext_hat_K",
+        ]
+        for key in required_keys:
+            if key not in data:
+                raise KeyError(f"Missing key '{key}' in robot state message")
 
-        offset = 0
-
-        timestamp_ms = unpacked[offset]
-        offset += 1
-
-        O_T_EE = torch.tensor(unpacked[offset : offset + 16])
-        O_T_EE_d = torch.tensor(unpacked[offset + 16 : offset + 32])
-        q = torch.tensor(unpacked[offset + 32 : offset + 39])
-        q_d = torch.tensor(unpacked[offset + 39 : offset + 46])
-        dq = torch.tensor(unpacked[offset + 46 : offset + 53])
-        dq_d = torch.tensor(unpacked[offset + 53 : offset + 60])
-        tau_ext_hat_filtered = torch.tensor(unpacked[offset + 60 : offset + 67])
-        O_F_ext_hat_K = torch.tensor(unpacked[offset + 67 : offset + 73])
-        K_F_ext_hat_K = torch.tensor(unpacked[offset + 73 : offset + 79])
+        to_tensor = lambda x: torch.tensor(x, dtype=torch.float64)
 
         return RobotState(
-            timestamp_ms=timestamp_ms,
-            O_T_EE=O_T_EE,
-            O_T_EE_d=O_T_EE_d,
-            q=q,
-            q_d=q_d,
-            dq=dq,
-            dq_d=dq_d,
-            tau_ext_hat_filtered=tau_ext_hat_filtered,
-            O_F_ext_hat_K=O_F_ext_hat_K,
-            K_F_ext_hat_K=K_F_ext_hat_K,
+            timestamp_ms=int(data["time_ms"]),
+            O_T_EE=to_tensor(data["O_T_EE"]),
+            O_T_EE_d=to_tensor(data["O_T_EE_d"]),
+            q=to_tensor(data["q"]),
+            q_d=to_tensor(data["q_d"]),
+            dq=to_tensor(data["dq"]),
+            dq_d=to_tensor(data["dq_d"]),
+            tau_ext_hat_filtered=to_tensor(data["tau_ext_hat_filtered"]),
+            O_F_ext_hat_K=to_tensor(data["O_F_ext_hat_K"]),
+            K_F_ext_hat_K=to_tensor(data["K_F_ext_hat_K"]),
         )
 
     def receive_state(self) -> Optional[RobotState]:
@@ -488,8 +489,8 @@ def main(cfg: DictConfig):
                 )
             )
 
-    state_topic = cfg.get("state_topic", "robot_state")
-    robot_name = cfg.get("robot_name", "franka")
+    state_topic = cfg.get("state_topic")
+    robot_name = cfg.get("robot_name", "FrankaPanda")
     robot = Robot(name=robot_name, state_topic=state_topic)
     robot.connect()
     data_collection_manager = DataCollectionManager(

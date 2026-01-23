@@ -26,6 +26,17 @@ def parse_args() -> argparse.Namespace:
         default="configs/zed_publisher.yaml",
         help="Path to YAML config file",
     )
+    parser.add_argument(
+        "--global-config",
+        type=str,
+        default="configs/config.yaml",
+        help="Path to global config with camera_streams topics",
+    )
+    parser.add_argument(
+        "--camera-name",
+        type=str,
+        help="Camera entry name in global config (e.g., zed_left)",
+    )
     parser.add_argument("--device-id", help="Serial number of the ZED camera")
     parser.add_argument("--publish-topic", help="ZeroLanCom topic to publish frames to")
     parser.add_argument("--width", type=int, help="Frame width")
@@ -66,15 +77,59 @@ def load_config(path: str) -> Dict[str, Any]:
     return data
 
 
+def _load_topic_from_global(config_path: str, camera_name: str | None = None) -> str | None:
+    """Read camera_streams from a global config and return the selected topic."""
+    cfg_path = Path(config_path)
+    if not cfg_path.is_file():
+        logger.warning("Global config %s not found; please supply --publish-topic explicitly", cfg_path)
+        return None
+
+    try:
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Failed to read global config %s: %s", cfg_path, exc)
+        return None
+
+    streams = data.get("camera_streams", {})
+    if not isinstance(streams, dict):
+        return None
+
+    if camera_name:
+        stream = streams.get(camera_name)
+        if isinstance(stream, dict):
+            topic = stream.get("topic")
+            if topic:
+                return topic
+        logger.warning("Camera '%s' not found or missing topic in %s", camera_name, cfg_path)
+
+    # fallback: first stream whose name starts with "zed"
+    for name, stream in streams.items():
+        if not isinstance(stream, dict):
+            continue
+        topic = stream.get("topic")
+        if topic and name.startswith("zed"):
+            return topic
+
+    # final fallback: first available topic
+    for stream in streams.values():
+        if isinstance(stream, dict) and stream.get("topic"):
+            return stream["topic"]
+
+    logger.warning("No camera topics found in %s", cfg_path)
+    return None
+
+
 def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
     defaults = {
-        "publish_topic": "zed_camera",
+        "publish_topic": None,
         "width": 1280,
         "height": 720,
         "fps": 30,
         "depth_mode": "PERFORMANCE",
         "show_preview": False,
         "log_interval": 60,
+        "camera_name": None,
+        "global_config": "configs/config.yaml",
     }
 
     file_cfg = load_config(args.config)
@@ -85,8 +140,16 @@ def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         if val is not None:
             merged[key] = val
 
+    if not merged.get("publish_topic"):
+        merged["publish_topic"] = _load_topic_from_global(
+            merged.get("global_config", "configs/config.yaml"),
+            camera_name=merged.get("camera_name"),
+        )
+
     if "device_id" not in merged or merged["device_id"] in (None, ""):
         raise ValueError("ZED device_id must be provided (config or CLI)")
+    if not merged.get("publish_topic"):
+        raise ValueError("publish_topic not provided and not found in global config")
 
     return merged
 

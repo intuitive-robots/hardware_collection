@@ -19,7 +19,7 @@ class DepthAICamera(AbstractCamera):
     def __init__(
         self,
         device_id,
-        port: int,
+        publish_topic: str,
         name=None,
         height=512,
         width=512,
@@ -27,7 +27,8 @@ class DepthAICamera(AbstractCamera):
     ):
         self.camera_type = camera_type
         self.device_id = device_id
-        super().__init__(publish_address=f"tcp://*:{port}")
+        self.name = name or f"DepthAI_{device_id}"
+        super().__init__(publish_topic=publish_topic)
         self.initialize()
 
     def initialize(self) -> None:
@@ -84,7 +85,11 @@ class DepthAICamera(AbstractCamera):
 
     @staticmethod
     def get_devices(
-        amount=-1, height: int = 512, width: int = 512, **kwargs
+        amount=-1,
+        topics: List[str] | None = None,
+        height: int = 512,
+        width: int = 512,
+        **kwargs,
     ) -> List[DepthAICamera]:
         """
         Finds and returns specific amount of instances of this class.
@@ -92,6 +97,7 @@ class DepthAICamera(AbstractCamera):
         Parameters:
         ----------
         - `amount` (int): Maximum amount of instances to be found. Leaving out `amount` or `amount = -1` returns all instances.
+        - `topics` (List[str] | None): Optional publish topics to use for each device. If omitted, defaults to auto-generated names.
         - `height` (int): Pixel-height of captured frames. Default: `512`
         - `width` (int): Pixel-width of captured frames. Default: `512`
         - `**kwargs`: Arbitrary keyword arguments.
@@ -107,7 +113,15 @@ class DepthAICamera(AbstractCamera):
         for device in cam_list:
             if amount != -1 and counter >= amount:
                 break
-            cam = DepthAICamera(device.getMxId(), height=height, width=width)
+            topic_name = (
+                topics[counter] if topics and counter < len(topics) else f"depthai_{counter}"
+            )
+            cam = DepthAICamera(
+                device.getMxId(),
+                publish_topic=topic_name,
+                height=height,
+                width=width,
+            )
             cams.append(cam)
             counter += 1
         return cams
