@@ -8,6 +8,7 @@ import signal
 import sys
 import time
 from pathlib import Path
+import threading
 from typing import Any, Dict
 
 import yaml
@@ -25,6 +26,12 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default="configs/zed_publisher.yaml",
         help="Path to YAML config file",
+    )
+    parser.add_argument(
+        "--zed-config-dir",
+        type=str,
+        default=None,
+        help="Directory containing per-camera ZED config YAMLs",
     )
     parser.add_argument(
         "--global-config",
@@ -130,6 +137,8 @@ def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         "log_interval": 60,
         "camera_name": None,
         "global_config": "configs/config.yaml",
+        "camera_configs": None,
+        "zed_config_dir": "hardware_collection/zed_config",
     }
 
     file_cfg = load_config(args.config)
@@ -140,16 +149,20 @@ def resolve_config(args: argparse.Namespace) -> Dict[str, Any]:
         if val is not None:
             merged[key] = val
 
+    if getattr(args, "zed_config_dir", None):
+        merged["zed_config_dir"] = args.zed_config_dir
+
     if not merged.get("publish_topic"):
         merged["publish_topic"] = _load_topic_from_global(
             merged.get("global_config", "configs/config.yaml"),
             camera_name=merged.get("camera_name"),
         )
 
-    if "device_id" not in merged or merged["device_id"] in (None, ""):
-        raise ValueError("ZED device_id must be provided (config or CLI)")
-    if not merged.get("publish_topic"):
-        raise ValueError("publish_topic not provided and not found in global config")
+    if not merged.get("camera_configs"):
+        if "device_id" not in merged or merged["device_id"] in (None, ""):
+            raise ValueError("ZED device_id must be provided (config or CLI)")
+        if not merged.get("publish_topic"):
+            raise ValueError("publish_topic not provided and not found in global config")
 
     return merged
 
@@ -164,32 +177,43 @@ class GracefulKiller:
         self.should_stop = True
 
 
-def main() -> int:
-    args = parse_args()
-    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+def _load_camera_config_files(camera_configs: list[str], base_dir: str) -> list[dict]:
+    cfgs: list[dict] = []
+    base_path = Path(base_dir)
+    for item in camera_configs:
+        cfg_path = Path(item)
+        if not cfg_path.is_absolute():
+            cfg_path = base_path / cfg_path
+        if not cfg_path.is_file():
+            raise FileNotFoundError(f"Camera config not found: {cfg_path}")
+        data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(data, dict):
+            raise ValueError(f"Camera config at {cfg_path} must be a mapping/dict")
+        data["_config_path"] = str(cfg_path)
+        cfgs.append(data)
+    return cfgs
 
-    cfg = resolve_config(args)
 
-    publish_topic = cfg["publish_topic"]
-    logger.info("Starting ZED publisher on ZeroLanCom topic '%s'", publish_topic)
+def _merge_camera_defaults(cam_cfg: dict, defaults: dict) -> dict:
+    merged = {**defaults, **cam_cfg}
+    if not merged.get("device_id"):
+        raise ValueError("device_id missing in camera config")
+    if not merged.get("publish_topic"):
+        raise ValueError("publish_topic missing in camera config")
+    return merged
 
-    camera = ZEDCamera(
-        device_id=str(cfg["device_id"]),
-        height=cfg["height"],
-        width=cfg["width"],
-        fps=cfg["fps"],
-        depth_mode=str(cfg["depth_mode"]),
-        show_preview=bool(cfg["show_preview"]),
-        publish_topic=publish_topic,
-    )
 
-    killer = GracefulKiller()
+def _camera_loop(
+    camera: ZEDCamera,
+    log_interval: int,
+    stop_event: threading.Event,
+    logger_name: str,
+) -> None:
+    local_logger = logging.getLogger(logger_name)
     frames_sent = 0
     last_report_time = time.time()
-    log_interval = cfg["log_interval"]
-
     try:
-        while not killer.should_stop:
+        while not stop_event.is_set():
             camera.publish_image()
             frames_sent += 1
 
@@ -197,15 +221,121 @@ def main() -> int:
             if now - last_report_time >= log_interval:
                 elapsed = now - last_report_time
                 fps = frames_sent / elapsed if elapsed > 0 else 0.0
-                logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
+                local_logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
                 frames_sent = 0
                 last_report_time = now
     except Exception as exc:  # pragma: no cover - runtime feedback only
-        logger.error("Publisher stopped due to error: %s", exc)
-        return 1
+        local_logger.error("Publisher stopped due to error: %s", exc)
     finally:
-        logger.info("Shutting down publisher")
         camera.close()
+
+
+def main() -> int:
+    args = parse_args()
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+
+    cfg = resolve_config(args)
+
+    killer = GracefulKiller()
+    if cfg.get("camera_configs"):
+        defaults = {
+            "width": cfg["width"],
+            "height": cfg["height"],
+            "fps": cfg["fps"],
+            "depth_mode": cfg["depth_mode"],
+            "show_preview": cfg["show_preview"],
+            "log_interval": cfg["log_interval"],
+        }
+        camera_cfgs = _load_camera_config_files(
+            cfg["camera_configs"],
+            cfg.get("zed_config_dir", "hardware_collection/zed_config"),
+        )
+        cameras: list[ZEDCamera] = []
+        threads: list[threading.Thread] = []
+        stop_event = threading.Event()
+
+        logger.info("Starting %d ZED publishers from config list", len(camera_cfgs))
+        for idx, cam_cfg in enumerate(camera_cfgs):
+            merged = _merge_camera_defaults(cam_cfg, defaults)
+            publish_topic = merged["publish_topic"]
+            config_path = merged.get("_config_path", "unknown")
+            logger.info(
+                "Camera config %d: %s | topic=%s | serial=%s",
+                idx,
+                config_path,
+                publish_topic,
+                merged.get("device_id"),
+            )
+            logger.info(
+                "Starting ZED publisher %d on ZeroLanCom topic '%s'", idx, publish_topic
+            )
+            camera = ZEDCamera(
+                device_id=str(merged["device_id"]),
+                height=int(merged["height"]),
+                width=int(merged["width"]),
+                fps=int(merged["fps"]),
+                depth_mode=str(merged["depth_mode"]),
+                show_preview=bool(merged["show_preview"]),
+                publish_topic=publish_topic,
+            )
+            cameras.append(camera)
+            thread = threading.Thread(
+                target=_camera_loop,
+                args=(
+                    camera,
+                    int(merged["log_interval"]),
+                    stop_event,
+                    f"{__name__}.cam{idx}",
+                ),
+                daemon=True,
+            )
+            threads.append(thread)
+            thread.start()
+
+        try:
+            while not killer.should_stop:
+                time.sleep(0.1)
+        finally:
+            logger.info("Shutting down publishers")
+            stop_event.set()
+            for thread in threads:
+                thread.join(timeout=5.0)
+    else:
+        publish_topic = cfg["publish_topic"]
+        logger.info("Starting ZED publisher on ZeroLanCom topic '%s'", publish_topic)
+
+        camera = ZEDCamera(
+            device_id=str(cfg["device_id"]),
+            height=cfg["height"],
+            width=cfg["width"],
+            fps=cfg["fps"],
+            depth_mode=str(cfg["depth_mode"]),
+            show_preview=bool(cfg["show_preview"]),
+            publish_topic=publish_topic,
+        )
+
+        frames_sent = 0
+        last_report_time = time.time()
+        log_interval = cfg["log_interval"]
+
+        try:
+            while not killer.should_stop:
+                camera.publish_image()
+                frames_sent += 1
+
+                now = time.time()
+                if now - last_report_time >= log_interval:
+                    elapsed = now - last_report_time
+                    fps = frames_sent / elapsed if elapsed > 0 else 0.0
+                    logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
+                    frames_sent = 0
+                    last_report_time = now
+        except Exception as exc:  # pragma: no cover - runtime feedback only
+            logger.error("Publisher stopped due to error: %s", exc)
+            return 1
+        finally:
+            logger.info("Shutting down publisher")
+            camera.close()
 
     return 0
 
