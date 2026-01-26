@@ -43,7 +43,7 @@ class Robot:
     ):
         self.name = name
         # FrankaControlProxy publishes on "<name>/franka_arm_state"
-        self.state_topic = state_topic or f"{name}/franka_arm_state"
+        self.state_topic = f"{name}/{state_topic}"
         self.recv_timeout_ms = recv_timeout_ms
         self.latest_state: Optional[bytes | dict] = None
 
@@ -99,7 +99,8 @@ class Robot:
         for key in required_keys:
             if key not in data:
                 raise KeyError(f"Missing key '{key}' in robot state message")
-
+        # print("[DEBUG] Robot state data keys:", list(data.keys()))
+        # print("[DEBUG] Robot state data sample:", {k: data[k] for k in required_keys})
         to_tensor = lambda x: torch.tensor(x, dtype=torch.float64)
 
         return RobotState(
@@ -236,11 +237,11 @@ class DataCollectionManager:
         writer_max_pending_writes: int = 4096,
         capture_interval: float = 0.0,
     ):
+        self._closing = True
         self.robot = robot
         self.robot.connect()
 
         self.camera_streams: List[RemoteCameraStream] = camera_streams or []
-        
         # Connect all camera streams
         for camera in self.camera_streams:
             camera.connect()
@@ -341,6 +342,7 @@ class DataCollectionManager:
     def __create_empty_data(self):
         self.robot_data = CollectionData()
         self.camera_timestamps = [[] for _ in self.camera_streams]
+        self.camera_frame_idx = [0] * len(self.camera_streams)  # Reset frame index for all cameras
 
     def __camera_identifier(self, camera: RemoteCameraStream, idx: int) -> str:
         candidate = camera.name or camera.address or f"camera_{idx}"
@@ -388,7 +390,7 @@ class DataCollectionManager:
 
     def __collection_step(self):
         state = self.robot.receive_state()
-        # print("Received robot state:", state)
+        # print("[DEBUG]Received robot state:", state)
         if state is None:
             return
 
@@ -494,21 +496,35 @@ class DataCollectionManager:
             print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
 
     def __close_hardware_connections(self):
+        print("Closing robot and camera connections...")
         self.robot.close()
+        print("Closed robot connection.")
 
         for camera in self.camera_streams:
             try:
                 camera.close()
+                print(f"Closed camera stream {camera.name}.")
             except Exception as exc:
                 print(f"Failed to close camera stream {camera.name}: {exc}")
 
         self.__flush_writes()
-        self._writer_pool.shutdown(wait=True, cancel_futures=False)
+        print("All pending writes completed.")
+        print("using ctrl+c to kill node")
+        # import faulthandler, sys
+        # faulthandler.dump_traceback(file=sys.stdout,all_threads=True)
+        # self._writer_pool.shutdown(wait=False, cancel_futures=True)
+        # print("Data collection manager shut down.")
+        # time.sleep(0.2)
+        # print("Alive Threads:")
+        # import threading
+        # for thread in threading.enumerate():
+        #     print(f" - {thread.name}")
+
 
 
 @hydra.main(version_base=None, config_path="./configs")
 def main(cfg: DictConfig):
-
+    pyzlc.init("data_collection_manager","192.168.0.109")
     camera_cfg = cfg.get("camera_streams", cfg.get("cameras", {}))
     camera_streams: List[RemoteCameraStream] = []
     if camera_cfg:

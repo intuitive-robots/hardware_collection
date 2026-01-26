@@ -173,6 +173,7 @@ class ZED(AbstractCamera):
             self.zed.close()
             self.zed = None
         self.close_sockets()
+        print(f"ZED camera {self.device_id} closed.")
 
     @staticmethod
     def get_devices(

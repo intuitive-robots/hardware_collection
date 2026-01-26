@@ -1,9 +1,9 @@
 #left camera config
 device_id: "30414018"
-depth_mode: "PERFORMANCE"
+depth_mode: "NEURAL"
 publish_topic: zed_left
 width: 672 #1280
 height: 376 #720
-fps: 60
+fps: 30
 show_preview: false
 log_interval: 10

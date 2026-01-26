@@ -8,6 +8,11 @@ readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
     "pytest>=8.3.5",
-    "pyzmq>=26.4.0",
     "PyYAML>=6.0",
+    "opencv-python>=4.5.0", # For camera-related operations
+    "numpy>=1.21.0",        # For numerical computations
+    "keyboard>=0.13.5",     # For handling keyboard input
+    "depthai>=2.20.0",      # For DepthAI camera support
+    "pyzed>=3.8.0",         # For ZED SDK integration
+    "pyzlc"
 ]

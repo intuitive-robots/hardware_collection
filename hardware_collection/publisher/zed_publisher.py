@@ -14,7 +14,7 @@ from typing import Any, Dict
 import yaml
 
 from hardware_collection.camera.camera_zed_sdk import ZED as ZEDCamera
-
+import pyzlc
 
 logger = logging.getLogger(__name__)
 
@@ -231,9 +231,9 @@ def _camera_loop(
 
 
 def main() -> int:
+    pyzlc.init("zed_cam_node","192.168.0.109")
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-
     cfg = resolve_config(args)
 
     killer = GracefulKiller()
@@ -295,11 +295,23 @@ def main() -> int:
         try:
             while not killer.should_stop:
                 time.sleep(0.1)
+        except KeyboardInterrupt:
+            logger.info("Received Ctrl+C, initiating shutdown")
+            killer.exit_gracefully()
         finally:
-            logger.info("Shutting down publishers")
+            logger.info("Setting stop event for all threads")
             stop_event.set()
             for thread in threads:
-                thread.join(timeout=5.0)
+                if thread.is_alive():
+                    logger.info("Waiting for thread %s to terminate", thread.name)
+                    thread.join(timeout=5.0)
+            logger.info("Ensuring all threads are terminated")
+            for thread in threads:
+                if thread.is_alive():
+                    logger.warning("Thread %s did not terminate, forcing shutdown", thread.name)
+
+            logger.info("Releasing all resources and exiting")
+            sys.exit(0)
     else:
         publish_topic = cfg["publish_topic"]
         logger.info("Starting ZED publisher on ZeroLanCom topic '%s'", publish_topic)

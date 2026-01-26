@@ -1,9 +1,9 @@
 #right camera config
-depth_mode: "NEURAL_LIGHT"
+depth_mode: "NEURAL"
 device_id: "33271979"
 publish_topic: zed_right
 width: 672 #1280
 height: 376 #720
-fps: 60
+fps: 30
 show_preview: false
 log_interval: 10
