@@ -15,7 +15,7 @@ import pyzlc
 import torch
 from omegaconf import DictConfig
 
-from hardware_collection.camera.camera import CameraFrame, CameraHeader
+from hardware_collection.camera.camera import CameraFrame, CameraHeader, FrameMetadata
 from utils.keyboard_input import NonBlockingKeyPress
 
 
@@ -260,6 +260,7 @@ class DataCollectionManager:
         self.camera_dirs: List[Path] = []
         self.camera_names: List[str] = []
         self.camera_timestamps: List[list[float]] = []
+        self.camera_metadata_list: List[list[dict]] = []  # Store metadata dicts for each camera
         self.camera_frame_idx = [0] * len(self.camera_streams)
         self.timestamps = []
         self.cur_timestep = 0
@@ -342,6 +343,7 @@ class DataCollectionManager:
     def __create_empty_data(self):
         self.robot_data = CollectionData()
         self.camera_timestamps = [[] for _ in self.camera_streams]
+        self.camera_metadata_list = [[] for _ in self.camera_streams]  # Reset metadata list for all cameras
         self.camera_frame_idx = [0] * len(self.camera_streams)  # Reset frame index for all cameras
 
     def __camera_identifier(self, camera: RemoteCameraStream, idx: int) -> str:
@@ -369,14 +371,14 @@ class DataCollectionManager:
             image_rgb = frame.image_data
             image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
             frame_path = camera_dir / f"{frame_idx:06d}.png"
-            header_path = frame_path.with_suffix(".header")
+            metadata_path = camera_dir / f"{frame_idx:06d}.json"
 
             try:
                 self.__submit_frame_write(
                     frame_path,
-                    header_path,
+                    metadata_path,
                     image_bgr,
-                    frame.header.to_bytes(),
+                    frame.metadata,
                     self.camera_names[idx],
                     self.cur_timestep,
                 )
@@ -387,6 +389,7 @@ class DataCollectionManager:
                 continue
 
             self.camera_timestamps[idx].append(frame.header.timestamp)
+            self.camera_metadata_list[idx].append(frame.metadata.to_dict())
 
     def __collection_step(self):
         state = self.robot.receive_state()
@@ -453,9 +456,9 @@ class DataCollectionManager:
     def __submit_frame_write(
         self,
         frame_path: Path,
-        header_path: Path,
+        metadata_path: Path,
         image_bgr: np.ndarray,
-        header_bytes: bytes,
+        metadata: FrameMetadata,
         cam_name: str,
         step: int,
     ) -> None:
@@ -464,7 +467,7 @@ class DataCollectionManager:
             raise Full
 
         future = self._writer_pool.submit(
-            self.__write_frame, frame_path, header_path, image_bgr, header_bytes, cam_name, step
+            self.__write_frame, frame_path, metadata_path, image_bgr, metadata, cam_name, step
         )
         self._writer_futures.append(future)
 
@@ -482,16 +485,15 @@ class DataCollectionManager:
     @staticmethod
     def __write_frame(
         frame_path: Path,
-        header_path: Path,
+        metadata_path: Path,
         image_bgr: np.ndarray,
-        header_bytes: bytes,
+        metadata: FrameMetadata,
         cam_name: str,
         step: int,
     ) -> None:
         try:
             cv2.imwrite(str(frame_path), image_bgr)
-            # with open(header_path, "wb") as header_file:
-            #     header_file.write(header_bytes)
+            metadata.save_to_file(str(metadata_path))
         except Exception as exc:
             print(f"Failed to write frame {frame_path} (cam {cam_name}, step {step}): {exc}")
 
