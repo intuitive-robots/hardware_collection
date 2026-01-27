@@ -1,0 +1,8 @@
+device_id: "00000000"  # ZED device ID
+publish_topic: zed_camera  # ZeroLanCom topic
+width: 1280
+height: 720
+fps: 30
+depth_mode: "PERFORMANCE"
+show_preview: True
+log_interval: 60

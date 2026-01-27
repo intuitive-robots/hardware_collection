@@ -1,0 +1,13 @@
+zed_config_dir: hardware_collection/zed_config
+camera_configs:
+  - 102_zed_left_cam.yaml
+  - 102_zed_right_cam.yaml
+  - 102_zed_wrist_cam.yaml
+
+# Defaults for any missing fields in per-camera configs.
+width: 1280
+height: 720
+fps: 30
+depth_mode: "PERFORMANCE"
+show_preview: false
+log_interval: 60
