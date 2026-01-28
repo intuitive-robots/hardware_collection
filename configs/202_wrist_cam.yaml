@@ -1,0 +1,10 @@
+_target_: real_robot_env.robot.hardware_depthai.DepthAI
+device_id: "1944301061BB782700"
+name: "wrist_cam"
+height: 512
+width: 512
+log_interval: 60
+publish_topic: "/wrist_cam/image_raw"
+camera_type: 
+  _target_: real_robot_env.robot.hardware_depthai.DAICameraType.__getitem__
+  name: OAK_D

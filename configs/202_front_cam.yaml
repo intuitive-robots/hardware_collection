@@ -1,0 +1,10 @@
+_target_: real_robot_env.robot.hardware_depthai.DepthAI
+device_id: "184430102111900E00"
+name: "front_cam"
+height: 512
+width: 512
+log_interval: 60
+publish_topic: "/front_cam/image_raw"
+camera_type: 
+  _target_: real_robot_env.robot.hardware_depthai.DAICameraType.__getitem__
+  name: OAK_D_LITE

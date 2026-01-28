@@ -4,8 +4,37 @@ import depthai as dai  # pylint: disable=no-member
 import enum
 from typing import List
 import cv2
+from networkx import to_dict_of_dicts
+from regex import D
 
 from .camera import AbstractCamera, CameraFrame, CameraHeader
+import yaml
+from pathlib import Path
+def load_wrist_cam_config(config_path=None):
+    """Load config from 202_wrist_cam.yaml and return as dict."""
+    if config_path is None:
+        config_path = Path(__file__).parent.parent.parent / "configs/202_wrist_cam.yaml"
+    with open(config_path, "r") as f:
+        cfg = yaml.safe_load(f)
+    # Flatten camera_type if present
+    camera_type = cfg.get("camera_type", {})
+    if isinstance(camera_type, dict) and "name" in camera_type:
+        cfg["camera_type"] = camera_type["name"]
+    return cfg
+def create_wrist_cam_from_config(config_path=None, publish_topic=None):
+    cfg = load_wrist_cam_config(config_path)
+    # Map string to DAICameraType
+    cam_type_str = cfg.get("camera_type", "OAK_D_SR")
+    cam_type = DAICameraType[cam_type_str] if isinstance(cam_type_str, str) else DAICameraType.OAK_D_SR
+    topic = publish_topic or cfg.get("name", "wrist_cam")
+    return DepthAICamera(
+        device_id=cfg["device_id"],
+        publish_topic=topic,
+        name=cfg.get("name", "wrist_cam"),
+        height=cfg.get("height", 512),
+        width=cfg.get("width", 512),
+        camera_type=cam_type,
+    )
 
 class DAICameraType(enum.Enum):
     OAK_D = 0
@@ -33,18 +62,13 @@ class DepthAICamera(AbstractCamera):
 
     def initialize(self) -> None:
         """Initialize the DepthAI camera hardware."""
-        if self.camera_type in [DAICameraType.OAK_D, DAICameraType.OAK_D_LITE]:
+        if self.camera_type:
             depthai_cam, board_socket, resolution = (
                 dai.node.ColorCamera,
                 dai.CameraBoardSocket.CAM_A,
                 dai.ColorCameraProperties.SensorResolution.THE_1080_P,
             )
-        elif self.camera_type == DAICameraType.OAK_D_SR:
-            depthai_cam, board_socket, resolution = (
-                dai.node.ColorCamera,
-                dai.CameraBoardSocket.CAM_C,
-                dai.ColorCameraProperties.SensorResolution.THE_1080_P,
-            )
+
         else:
             raise ValueError("Unsupported DepthAI camera type.")
 
@@ -58,9 +82,9 @@ class DepthAICamera(AbstractCamera):
 
         self.device_info = dai.DeviceInfo(self.device_id)
 
-        self.device = dai.Device(self.pipeline.getDeviceConfig(), self.device_info)
+        self.device = dai.Device(self.pipeline, self.device_info)
         self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=1, blocking=False)  # type: ignore
-
+        self.q_depth = None
 
     def capture_image(self) -> CameraFrame:
         """Get sensor data from the DepthAI camera.
@@ -81,6 +105,15 @@ class DepthAICamera(AbstractCamera):
             image_data=frame,
         )
         return frame
+    
+    def capture_depth(self) -> CameraFrame:
+        """Get depth data from the DepthAI camera.
+
+        Returns:
+            CameraFrame: The depth data.
+        """
+
+        return None
 
 
     @staticmethod

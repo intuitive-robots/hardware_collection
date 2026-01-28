@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 import threading
 from typing import Any, Dict
+import cv2
+import numpy as np
 
 from numpy import diag_indices
 import yaml
@@ -79,15 +81,24 @@ def _Connect_cam():
         if field not in camera_config:
             raise ValueError(f"Missing required field '{field}' in the YAML configuration")
 
+    # Extract camera_type name if it's a dict
+    camera_type = camera_config.get("camera_type")
+    if isinstance(camera_type, dict) and "name" in camera_type:
+        camera_config["camera_type"] = camera_type["name"]
+
+    # Convert to DAICameraType enum
+    from hardware_collection.camera.camera_depthai import DAICameraType
+    camera_type_enum = DAICameraType[camera_config["camera_type"]]
+
     pyzlc.init(camera_config["publish_topic"], "192.168.0.109")
     print(f"ZED Publisher initialized on topic: {camera_config['publish_topic']}")
 
-    # Initialize the ZED camera with the configuration
+    # Initialize the DepthAI camera with the configuration
     camera = DAIcam(
         device_id=str(camera_config["device_id"]),
         height=int(camera_config["height"]),
         width=int(camera_config["width"]),
-        camera_type=camera_config["camera_type"],
+        camera_type=camera_type_enum,
         publish_topic=camera_config["publish_topic"],
     )
 
@@ -96,8 +107,19 @@ def _Connect_cam():
     log_interval = int(camera_config.get("log_interval", 60))
     
     try:
-        cam_list = camera.get_devices(topics=[camera_config["publish_topic"]])
-        print("cam_list:", cam_list)
+
+        frame = camera.capture_image()
+        # If capture_image returns a CameraFrame, extract the image_data
+        if hasattr(frame, 'image_data'):
+            img = frame.image_data
+        else:
+            img = frame
+        if img is not None and isinstance(img, np.ndarray):
+                out_path = "/home/multimodallearning/Pictures/depthai_single_frame.jpg"
+                cv2.imwrite(out_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
+                print(f"Saved single frame to {out_path}")
+        else:
+            print("Warning: Invalid frame received!")
         while True:
             frames_sent += 1
 
