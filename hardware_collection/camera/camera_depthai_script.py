@@ -4,12 +4,9 @@ import depthai as dai  # pylint: disable=no-member
 import enum
 from typing import List
 import cv2
-from networkx import to_dict_of_dicts
-from regex import D, T
 
 from .camera import AbstractCamera, CameraFrame, CameraHeader
-import yaml
-from pathlib import Path
+
 class DAICameraType(enum.Enum):
     OAK_D = 0
     OAK_D_LITE = 1
@@ -17,6 +14,7 @@ class DAICameraType(enum.Enum):
 
 
 class DepthAICamera(AbstractCamera):
+    """DepthAI camera hardware component."""
 
     def __init__(
         self,
@@ -34,15 +32,19 @@ class DepthAICamera(AbstractCamera):
         self.initialize()
 
     def initialize(self) -> None:
-
         """Initialize the DepthAI camera hardware."""
-        if self.camera_type:
+        if self.camera_type in [DAICameraType.OAK_D, DAICameraType.OAK_D_LITE]:
             depthai_cam, board_socket, resolution = (
                 dai.node.ColorCamera,
                 dai.CameraBoardSocket.CAM_A,
                 dai.ColorCameraProperties.SensorResolution.THE_1080_P,
             )
-
+        elif self.camera_type == DAICameraType.OAK_D_SR:
+            depthai_cam, board_socket, resolution = (
+                dai.node.ColorCamera,
+                dai.CameraBoardSocket.CAM_C,
+                dai.ColorCameraProperties.SensorResolution.THE_1080_P,
+            )
         else:
             raise ValueError("Unsupported DepthAI camera type.")
 
@@ -50,25 +52,15 @@ class DepthAICamera(AbstractCamera):
         cam_rgb = self.pipeline.create(depthai_cam)
         cam_rgb.setBoardSocket(board_socket)
         cam_rgb.setResolution(resolution)
-
-        # cam_rgb.setPreviewSize(640, 352)  # or other size as needed
-        # cam_rgb.setInterleaved(False)
-        cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
-
-        xout_rgb = self.pipeline.create(dai.node.XLinkOut)  # type: ignore
+        xout_rgb = self.pipeline.createXLinkOut()  # type: ignore
         xout_rgb.setStreamName("rgb")
         cam_rgb.preview.link(xout_rgb.input)
 
         self.device_info = dai.DeviceInfo(self.device_id)
 
         self.device = dai.Device(self.pipeline, self.device_info)
-        self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=1, blocking=True)  # type: ignore
-        self.q_depth = None
+        self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=1, blocking=False)  # type: ignore
 
-    def close(self):
-        """Release resources and close publishers."""
-        self.close_sockets()
-    """DepthAI camera hardware component."""
 
     def capture_image(self) -> CameraFrame:
         """Get sensor data from the DepthAI camera.
@@ -77,29 +69,18 @@ class DepthAICamera(AbstractCamera):
             CameraFrame: The sensor data.
         """
         bgr_img = self.q_rgb.get().getCvFrame()
-        print("inconverted img shape:", bgr_img.shape, "dtype:", bgr_img.dtype)
-        # rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
-
+        frame = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
         frame = CameraFrame(
             header=CameraHeader(
-                width=bgr_img.shape[1],
-                height=bgr_img.shape[0],
-                channels=bgr_img.shape[2],
+                width=frame.shape[1],
+                height=frame.shape[0],
+                channels=frame.shape[2],
                 timestamp=time.time(),
                 frame_id=0,
             ),
-            image_data=bgr_img,
+            image_data=frame,
         )
         return frame
-    
-    def capture_depth(self) -> CameraFrame:
-        """Get depth data from the DepthAI camera.
-
-        Returns:
-            CameraFrame: The depth data.
-        """
-
-        return None
 
 
     @staticmethod
@@ -144,3 +125,15 @@ class DepthAICamera(AbstractCamera):
             cams.append(cam)
             counter += 1
         return cams
+
+if __name__ == "__main__":
+    cameras = DepthAICamera.get_devices(amount=1)
+    cam = DepthAICamera(device_id="1944301061BB782700",
+                        publish_topic=None,
+                        height=512,
+                        width=512,
+                        camera_type=DAICameraType.OAK_D
+                        )
+    
+    frame = cam.capture_image()
+    cv2.imwrite("frame.png", cv2.cvtColor(frame.image_data, cv2.COLOR_RGB2BGR))

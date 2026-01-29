@@ -1,4 +1,4 @@
-"""ZED camera publisher that streams frames over ZeroLanCom."""
+"""DepthAI camera publisher that streams frames over ZeroLanCom."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 import threading
 from typing import Any, Dict
+from cupshelpers import Printer
 import cv2
 import numpy as np
 
@@ -90,7 +91,7 @@ def _Connect_cam():
     from hardware_collection.camera.camera_depthai import DAICameraType
     camera_type_enum = DAICameraType[camera_config["camera_type"]]
 
-    pyzlc.init(camera_config["publish_topic"], "192.168.0.109")
+    pyzlc.init(camera_config["publish_topic"], "10.172.218.210")
     print(f"ZED Publisher initialized on topic: {camera_config['publish_topic']}")
 
     # Initialize the DepthAI camera with the configuration
@@ -107,20 +108,17 @@ def _Connect_cam():
     log_interval = int(camera_config.get("log_interval", 60))
     
     try:
-
+        # --- Save a single frame to outputs/captured_images/frame.png ---
         frame = camera.capture_image()
-        # If capture_image returns a CameraFrame, extract the image_data
-        if hasattr(frame, 'image_data'):
-            img = frame.image_data
-        else:
-            img = frame
-        if img is not None and isinstance(img, np.ndarray):
-                out_path = "/home/multimodallearning/Pictures/depthai_single_frame.jpg"
-                cv2.imwrite(out_path, cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
-                print(f"Saved single frame to {out_path}")
-        else:
-            print("Warning: Invalid frame received!")
+        save_path = Path("outputs/captured_images/frame0.png")
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        # cv2.imwrite(str(save_path), frame.image_data)
+        frame.save_image(str(save_path))
+        print(f"Saved a frame to {save_path}")
+
         while True:
+            frame = camera.capture_image()
+            camera.publish_image(frame)
             frames_sent += 1
 
             now = time.time()
@@ -130,6 +128,7 @@ def _Connect_cam():
                 logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
                 frames_sent = 0
                 last_report_time = now
+            time.sleep(0.1)  # Small delay to prevent CPU overload
     except Exception as exc:  # pragma: no cover - runtime feedback only
         logger.error("Publisher stopped due to error: %s", exc)
         return 1

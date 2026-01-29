@@ -206,12 +206,9 @@ class CameraFrame:
         return CameraFrame(header, image_data)
     
     def save_image(self, filepath: str) -> None:
-        """Save the image to a file.
-        
-        Args:
-            filepath (str): Path to save the image file.
-        """
-        cv2.imwrite(filepath, self.image_data)
+        """Save the image to a file, converting from RGB to BGR if needed for OpenCV."""
+        bgr_image = cv2.cvtColor(self.image_data, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(filepath, bgr_image)
     
     def save_metadata(self, filepath: str) -> None:
         """Save metadata to a JSON file.
