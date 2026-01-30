@@ -108,14 +108,6 @@ def _Connect_cam():
     log_interval = int(camera_config.get("log_interval", 60))
     
     try:
-        # --- Save a single frame to outputs/captured_images/frame.png ---
-        frame = camera.capture_image()
-        save_path = Path("outputs/captured_images/frame0.png")
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        # cv2.imwrite(str(save_path), frame.image_data)
-        frame.save_image(str(save_path))
-        print(f"Saved a frame to {save_path}")
-
         while True:
             frame = camera.capture_image()
             camera.publish_image(frame)

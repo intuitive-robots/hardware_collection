@@ -36,7 +36,13 @@ class DepthAICamera(AbstractCamera):
     def initialize(self) -> None:
 
         """Initialize the DepthAI camera hardware."""
-        if self.camera_type:
+        if self.camera_type==DAICameraType.OAK_D_SR:
+            depthai_cam, board_socket, resolution = (
+                dai.node.ColorCamera,
+                dai.CameraBoardSocket.CAM_C,
+                dai.ColorCameraProperties.SensorResolution.THE_1080_P,
+            )
+        elif self.camera_type in [DAICameraType.OAK_D, DAICameraType.OAK_D_LITE]:
             depthai_cam, board_socket, resolution = (
                 dai.node.ColorCamera,
                 dai.CameraBoardSocket.CAM_A,

@@ -4,6 +4,7 @@ import depthai as dai  # pylint: disable=no-member
 import enum
 from typing import List
 import cv2
+from numpy import info
 
 from .camera import AbstractCamera, CameraFrame, CameraHeader
 
@@ -37,7 +38,7 @@ class DepthAICamera(AbstractCamera):
             depthai_cam, board_socket, resolution = (
                 dai.node.ColorCamera,
                 dai.CameraBoardSocket.CAM_A,
-                dai.ColorCameraProperties.SensorResolution.THE_1080_P,
+                dai.ColorCameraProperties.SensorResolution.THE_800_P,
             )
         elif self.camera_type == DAICameraType.OAK_D_SR:
             depthai_cam, board_socket, resolution = (
@@ -52,15 +53,20 @@ class DepthAICamera(AbstractCamera):
         cam_rgb = self.pipeline.create(depthai_cam)
         cam_rgb.setBoardSocket(board_socket)
         cam_rgb.setResolution(resolution)
+        cam_rgb.setPreviewSize(512, 512)  # or other size as needed
+        cam_rgb.setInterleaved(False)
+        cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
         xout_rgb = self.pipeline.createXLinkOut()  # type: ignore
         xout_rgb.setStreamName("rgb")
-        cam_rgb.preview.link(xout_rgb.input)
+        cam_rgb.video.link(xout_rgb.input)
 
         self.device_info = dai.DeviceInfo(self.device_id)
 
         self.device = dai.Device(self.pipeline, self.device_info)
-        self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=1, blocking=False)  # type: ignore
-
+        self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)  # type: ignore
+        for _ in range(20):
+            self.q_rgb.get()
+        print("camera initialized")
 
     def capture_image(self) -> CameraFrame:
         """Get sensor data from the DepthAI camera.
@@ -137,3 +143,4 @@ if __name__ == "__main__":
     
     frame = cam.capture_image()
     cv2.imwrite("frame.png", cv2.cvtColor(frame.image_data, cv2.COLOR_RGB2BGR))
+    print("Captured image saved as frame.png")

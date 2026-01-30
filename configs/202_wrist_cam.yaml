@@ -7,4 +7,4 @@ log_interval: 60
 publish_topic: "/wrist_cam/image_raw"
 camera_type: 
   _target_: real_robot_env.robot.hardware_depthai.DAICameraType.__getitem__
-  name: OAK_D
+  name: OAK_D_SR
