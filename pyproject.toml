@@ -13,6 +13,13 @@ dependencies = [
     "numpy>=1.21.0",        # For numerical computations
     "keyboard>=0.13.5",     # For handling keyboard input
     "depthai>=2.20.0",      # For DepthAI camera support
-    "pyzed>=3.8.0",         # For ZED SDK integration
     "pyzlc"
 ]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hardware_collection*"]
+exclude = ["configs*", "test*", "utils*"]
