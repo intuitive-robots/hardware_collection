@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import time
 import depthai as dai  # pylint: disable=no-member
 import enum
@@ -20,17 +21,17 @@ class DepthAICamera(AbstractCamera):
 
     def __init__(
         self,
-        device_id,
-        publish_topic: str,
-        name=None,
-        height=512,
-        width=512,
+        name: str,
+        device_id: str,
+        height: int = 640,
+        width: int = 480,
         camera_type: DAICameraType = DAICameraType.OAK_D_LITE,
+        zlc_config: str = "configs/zlc.yaml"
     ):
         self.camera_type = camera_type
         self.device_id = device_id
         self.name = name or f"DepthAI_{device_id}"
-        super().__init__(publish_topic=publish_topic)
+        super().__init__(self.name, width, height, show_preview=True, depth=False, zlc_config=zlc_config)
         self.initialize()
 
     def initialize(self) -> None:
@@ -51,9 +52,12 @@ class DepthAICamera(AbstractCamera):
 
         else:
             raise ValueError("Unsupported DepthAI camera type.")
+        
+        
+        self.device_info = dai.DeviceInfo(self.device_id)
 
         self.pipeline = dai.Pipeline()
-        cam_rgb = self.pipeline.create(depthai_cam)
+        cam_rgb = self.pipeline.create(dai.node.ColorCamera)
         cam_rgb.setBoardSocket(board_socket)
         cam_rgb.setResolution(resolution)
 
@@ -76,7 +80,7 @@ class DepthAICamera(AbstractCamera):
         self.close_sockets()
     """DepthAI camera hardware component."""
 
-    def capture_image(self) -> CameraFrame:
+    def capture_frame(self) -> CameraFrame:
         """Get sensor data from the DepthAI camera.
 
         Returns:
@@ -133,8 +137,6 @@ class DepthAICamera(AbstractCamera):
         """
 
         cam_list = dai.Device.getAllAvailableDevices()
-        cams = []
-        counter = 0
         for device in cam_list:
             if amount != -1 and counter >= amount:
                 break

@@ -1,0 +1,1 @@
+python -m hardware_collection.camera.camera_depthai --config ./configs/depthai.yaml

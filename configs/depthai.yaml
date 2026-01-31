@@ -1,0 +1,6 @@
+zlc_config_path: configs/zlc.yaml
+
+device_name: depthai_camera
+device_id: 19443010B11CEF1200
+width: 1280
+height: 640
