@@ -91,7 +91,7 @@ def _Connect_cam():
     from hardware_collection.camera.camera_depthai import DAICameraType
     camera_type_enum = DAICameraType[camera_config["camera_type"]]
 
-    pyzlc.init(camera_config["publish_topic"], "10.172.218.210")
+    pyzlc.init(camera_config["publish_topic"], "127.0.0.1")
     print(f"ZED Publisher initialized on topic: {camera_config['publish_topic']}")
 
     # Initialize the DepthAI camera with the configuration
@@ -111,6 +111,7 @@ def _Connect_cam():
         while True:
             frame = camera.capture_image()
             camera.publish_image(frame)
+            time.sleep(1)
             frames_sent += 1
 
             now = time.time()
@@ -120,7 +121,7 @@ def _Connect_cam():
                 logger.info("Published %d frames (%.2f FPS)", frames_sent, fps)
                 frames_sent = 0
                 last_report_time = now
-            time.sleep(0.1)  # Small delay to prevent CPU overload
+            # time.sleep(0.1)  # Small delay to prevent CPU overload
     except Exception as exc:  # pragma: no cover - runtime feedback only
         logger.error("Publisher stopped due to error: %s", exc)
         return 1

@@ -84,17 +84,17 @@ class DepthAICamera(AbstractCamera):
         """
         bgr_img = self.q_rgb.get().getCvFrame()
         print("inconverted img shape:", bgr_img.shape, "dtype:", bgr_img.dtype)
-        # rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
+        rgb_img = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2RGB)
 
         frame = CameraFrame(
             header=CameraHeader(
-                width=bgr_img.shape[1],
-                height=bgr_img.shape[0],
-                channels=bgr_img.shape[2],
+                width=rgb_img.shape[1],
+                height=rgb_img.shape[0],
+                channels=rgb_img.shape[2],
                 timestamp=time.time(),
                 frame_id=0,
             ),
-            image_data=bgr_img,
+            image_data=rgb_img,
         )
         return frame
     

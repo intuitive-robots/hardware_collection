@@ -4,7 +4,7 @@ name: "centric_cam"
 height: 512
 width: 512
 log_interval: 60
-publish_topic: "/centric_cam/image_raw"
+publish_topic: "/centric_cam"
 camera_type: 
   _target_: real_robot_env.robot.hardware_depthai.DAICameraType.__getitem__
   name: OAK_D_LITE
