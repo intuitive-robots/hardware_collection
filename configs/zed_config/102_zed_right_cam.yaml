@@ -1,9 +1,10 @@
 #right camera config
 device_id: "33271979"
-depth_mode: "NEURAL" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
+depth_mode: "NEURAL_LIGHT" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
 publish_topic: zed_right
 width: 672 #1280
 height: 376 #720
-fps: 30
+fps: 60
 show_preview: false
-log_interval: 10
+log_interval: 100
+zlc_config: "/home/irl-admin/LZY/hardware_collection/configs/zlc.yaml"

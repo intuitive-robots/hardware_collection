@@ -42,7 +42,7 @@ class GelloNode:
 
 def main():
     args = tyro.cli(Args)
-    pyzlc.init(args.node_name, args.ip, group_name="DroidGroup")
+    pyzlc.init(args.node_name, args.ip, group_name="DroidGroup",group_port=7730)
     agent = GelloAgent(port=args.hardware_port)
     gello_node = GelloNode(args.node_name, agent,
                         state_pub_rate_hz=args.state_pub_rate_hz)

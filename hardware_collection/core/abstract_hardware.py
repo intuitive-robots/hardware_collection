@@ -17,7 +17,7 @@ class AbstractHardware:
         print(f"Loading ZLC config from: {os.path.join(os.getcwd(), config_path)}")
         with open(os.path.join(os.getcwd(), config_path), 'r') as f:
             self.config = yaml.load(f, Loader=yaml.SafeLoader)
-        pyzlc.init(self.device_name, self.config["local_ip"], group_name=self.config["group_name"])
+        pyzlc.init(self.device_name, self.config["local_ip"], group_name=self.config["group_name"],group_port=7730)
         self.publisher = pyzlc.Publisher(self.device_name)
 
     @abc.abstractmethod
