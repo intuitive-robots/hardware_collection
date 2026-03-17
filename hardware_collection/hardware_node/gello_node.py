@@ -14,7 +14,7 @@ from hardware_collection.core.abstract_hardware import AbstractHardware
 @dataclass
 class Args:
     node_name: str = "gello"
-    ip: str = "192.168.0.109"
+    ip: str = "192.168.1.1"
     hardware_port: str = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0" #check the actual config
     state_pub_rate_hz: int = 1000
 
