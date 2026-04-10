@@ -5,6 +5,7 @@ import depthai as dai  # pylint: disable=no-member
 import enum
 import yaml
 import argparse
+import cv2
 
 from .camera import AbstractCamera, CameraFrame
 
@@ -43,7 +44,7 @@ class DepthAICamera(AbstractCamera):
         elif self.camera_type == DAICameraType.OAK_D_SR:
             _, board_socket, resolution = (
                 dai.node.ColorCamera,
-                dai.CameraBoardSocket.CAM_C,
+                dai.CameraBoardSocket.CAM_B,
                 dai.ColorCameraProperties.SensorResolution.THE_1080_P,
             )
         else:
@@ -59,9 +60,9 @@ class DepthAICamera(AbstractCamera):
         
         cam_rgb.setPreviewSize(self.width, self.height) 
         cam_rgb.setInterleaved(False)
-        cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+        cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
         
-        cam_rgb.setFps(30)
+        cam_rgb.setFps(40)
 
         xout_rgb = self.pipeline.create(dai.node.XLinkOut)
         xout_rgb.setStreamName("rgb")
@@ -81,13 +82,14 @@ class DepthAICamera(AbstractCamera):
         """
         raw_data = self.q_rgb.get().getRaw()
         rgb_mat = raw_data.data.reshape((3, self.height, self.width))
-        rgb_mat = rgb_mat.transpose(1, 2, 0)  # HWC format
+        bgr_mat = rgb_mat[[2, 1, 0], :, :]  # Convert RGB to BGR for OpenCV
+        bgr_mat = bgr_mat.transpose(1, 2, 0)  # HWC RGB format
         frame = CameraFrame(
             height=self.height,
             width=self.width,
             channels=3,
             timestamp=time.time_ns(),
-            rgb_data= rgb_mat.tobytes(),
+            rgb_data= bgr_mat.tobytes(),
             depth_data=None,
         )
         return frame
@@ -112,7 +114,8 @@ if __name__ == "__main__":
             config["device_name"],
             device_id=config["device_id"],
             width=config["width"],
-            height=config["height"]
+            height=config["height"],
+            camera_type=DAICameraType[config.get("camera_type")]
         )
         while True:
             depthai_camera.publish_frame()

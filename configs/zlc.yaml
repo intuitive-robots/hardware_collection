@@ -1,2 +1,2 @@
-group_name: DroidGroup
-local_ip: 192.168.0.109
+group_name: "robot_lab_robotiq_202"
+local_ip: 141.3.53.25
