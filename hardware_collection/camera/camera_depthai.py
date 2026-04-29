@@ -6,6 +6,7 @@ import enum
 import yaml
 import argparse
 import cv2
+import numpy as np
 
 from .camera import AbstractCamera, CameraFrame
 
@@ -68,10 +69,34 @@ class DepthAICamera(AbstractCamera):
         xout_rgb.setStreamName("rgb")
         cam_rgb.preview.link(xout_rgb.input)
 
+        mono_left = self.pipeline.create(dai.node.MonoCamera)
+        mono_right = self.pipeline.create(dai.node.MonoCamera)
+        stereo = self.pipeline.create(dai.node.StereoDepth)
+        xout_depth = self.pipeline.create(dai.node.XLinkOut)
+        xout_depth.setStreamName("depth")
+
+        mono_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
+        mono_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
+        mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+        mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+        mono_left.setFps(40)
+        mono_right.setFps(40)
+
+        stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
+        stereo.initialConfig.setConfidenceThreshold(200)
+        stereo.setLeftRightCheck(True)
+        stereo.setDepthAlign(board_socket)
+        stereo.setOutputSize(self.width, self.height)
+
+        mono_left.out.link(stereo.left)
+        mono_right.out.link(stereo.right)
+        stereo.depth.link(xout_depth.input)
+
         self.device = dai.Device(self.pipeline, dai.UsbSpeed.SUPER)
         assert self.device.getUsbSpeed() == dai.UsbSpeed.SUPER, "DepthAI camera requires USB 3.0 connection."
         
         self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
+        self.q_depth = self.device.getOutputQueue(name="depth", maxSize=4, blocking=False)
 
 
     def capture_frame(self) -> CameraFrame:
@@ -80,19 +105,47 @@ class DepthAICamera(AbstractCamera):
         Returns:
             CameraFrame: The sensor data.
         """
-        raw_data = self.q_rgb.get().getRaw()
-        rgb_mat = raw_data.data.reshape((3, self.height, self.width))
-        bgr_mat = rgb_mat[[2, 1, 0], :, :]  # Convert RGB to BGR for OpenCV
-        bgr_mat = bgr_mat.transpose(1, 2, 0)  # HWC RGB format
+        rgb_raw = self.q_rgb.get().getRaw()
+        rgb_mat = rgb_raw.data.reshape((3, self.height, self.width))
+        rgb_mat = rgb_mat.transpose(1, 2, 0)
+
+        depth_mat = self.q_depth.get().getFrame()
+        if depth_mat.shape != (self.height, self.width):
+            depth_mat = cv2.resize(depth_mat, (self.width, self.height), interpolation=cv2.INTER_NEAREST)
+
         frame = CameraFrame(
             height=self.height,
             width=self.width,
             channels=3,
             timestamp=time.time_ns(),
-            rgb_data= bgr_mat.tobytes(),
-            depth_data=None,
+            rgb_data=rgb_mat.tobytes(),
+            depth_data=depth_mat.astype(np.uint16, copy=False).tobytes(),
         )
         return frame
+
+    def show_preview_rgbd(self, frame: CameraFrame) -> None:
+        if frame["depth_data"] is None:
+            self.show_preview_rgb(frame)
+            return
+
+        rgb = np.frombuffer(frame["rgb_data"], dtype=np.uint8).reshape(
+            (frame["height"], frame["width"], frame["channels"])
+        )
+        depth = np.frombuffer(frame["depth_data"], dtype=np.uint16).reshape(
+            (frame["height"], frame["width"])
+        )
+
+        depth_vis = np.nan_to_num(depth.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        nonzero = depth_vis[depth_vis > 0]
+        max_val = float(np.percentile(nonzero, 95)) if nonzero.size else 1.0
+        max_val = max(max_val, 1e-6)
+        depth_vis = np.clip(depth_vis, 0.0, max_val)
+        depth_vis = (depth_vis / max_val * 255.0).astype(np.uint8)
+        depth_color = cv2.applyColorMap(depth_vis, cv2.COLORMAP_TURBO)
+
+        cv2.imshow(f"{self.device_name} RGB", rgb)
+        cv2.imshow(f"{self.device_name} Depth", depth_color)
+        cv2.waitKey(1)
 
 
     @staticmethod
