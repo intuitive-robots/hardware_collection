@@ -117,7 +117,7 @@ class DepthAICamera(AbstractCamera):
             height=self.height,
             width=self.width,
             channels=3,
-            timestamp=time.time_ns(),
+            timestamp=time.time(),
             rgb_data=rgb_mat.tobytes(),
             depth_data=depth_mat.astype(np.uint16, copy=False).tobytes(),
         )
@@ -157,7 +157,7 @@ class DepthAICamera(AbstractCamera):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/zlc_config.yaml", help="Path to ZLC config file.")
+    parser.add_argument("--config", type=str, default="configs/depthai_wrist.yaml", help="Path to DepthAI camera config file.")
     args = parser.parse_args()
     DepthAICamera.get_devices()
     with open(os.path.join(os.getcwd(), args.config), 'r') as f:
@@ -168,7 +168,8 @@ if __name__ == "__main__":
             device_id=config["device_id"],
             width=config["width"],
             height=config["height"],
-            camera_type=DAICameraType[config.get("camera_type")]
+            camera_type=DAICameraType[config.get("camera_type")],
+            zlc_config=config.get("zlc_config_path", "configs/zlc.yaml"),
         )
         while True:
             depthai_camera.publish_frame()
