@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,9 @@ import cv2
 import numpy as np
 import pyzlc
 import yaml
+
+if __package__ is None or __package__ == "":
+    sys.path.append(str(Path(__file__).resolve().parents[2]))
 
 from hardware_collection.hardware_node.wrist_cam_hand_eye_calibration_node import (
     WristCamHandEyeCalibrator,
@@ -87,7 +91,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stabilize-delay",
         type=float,
-        default=2.0,
+        default=5.0,
         help="Wait this many seconds after first detecting the chessboard before accepting a sample.",
     )
     parser.add_argument(
