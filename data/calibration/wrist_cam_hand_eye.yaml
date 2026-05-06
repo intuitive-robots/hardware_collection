@@ -1,4 +1,9 @@
 camera: wrist_cam
+intrinsics:
+  fx: 984.7691650390625
+  fy: 984.7691650390625
+  cx: 622.883056640625
+  cy: 327.6851806640625
 calibration_type: eye_in_hand
 sample_count: 40
 method: tsai

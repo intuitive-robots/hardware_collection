@@ -3,4 +3,4 @@ device_name: static_cam
 device_id:  1844301051D9B50F00 #19443010B11CEF1200
 camera_type: OAK_D_LITE
 width: 1280
-height: 640
+height: 720
