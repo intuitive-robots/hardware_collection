@@ -77,14 +77,15 @@ class DepthAICamera(AbstractCamera):
 
         mono_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
         mono_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
-        mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
-        mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_400_P)
+        mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
+        mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
         mono_left.setFps(40)
         mono_right.setFps(40)
 
         stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
         stereo.initialConfig.setConfidenceThreshold(200)
         stereo.setLeftRightCheck(True)
+        stereo.setSubpixel(True)
         stereo.setDepthAlign(board_socket)
         stereo.setOutputSize(self.width, self.height)
 
