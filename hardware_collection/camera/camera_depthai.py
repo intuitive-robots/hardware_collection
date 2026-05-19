@@ -1,14 +1,20 @@
 from __future__ import annotations
+
+import argparse
+import enum
+import logging
 import os
 import time
-import depthai as dai  # pylint: disable=no-member
-import enum
-import yaml
-import argparse
+
 import cv2
+import depthai as dai  # pylint: disable=no-member
 import numpy as np
+import yaml
 
 from .camera import AbstractCamera, CameraFrame
+
+logger = logging.getLogger(__name__)
+
 
 class DAICameraType(enum.Enum):
     OAK_D = 0
@@ -26,12 +32,23 @@ class DepthAICamera(AbstractCamera):
         height: int = 640,
         width: int = 480,
         camera_type: DAICameraType = DAICameraType.OAK_D_LITE,
-        zlc_config: str = "configs/zlc.yaml"
+        fps: int = 30,
+        require_usb3: bool = False,
+        zlc_config: str = "configs/zlc.yaml",
     ):
         self.camera_type = camera_type
         self.device_id = device_id
         self.name = name or f"DepthAI_{device_id}"
-        super().__init__(self.name, width, height, show_preview=True, depth=False, zlc_config=zlc_config)
+        self.fps = fps
+        self.require_usb3 = require_usb3
+        super().__init__(
+            self.name,
+            width,
+            height,
+            show_preview=True,
+            depth=False,
+            zlc_config=zlc_config,
+        )
         self.initialize()
 
     def initialize(self) -> None:
@@ -50,20 +67,19 @@ class DepthAICamera(AbstractCamera):
             )
         else:
             raise ValueError("Unsupported DepthAI camera type.")
-        
-        
+
         self.device_info = dai.DeviceInfo(self.device_id)
 
         self.pipeline = dai.Pipeline()
         cam_rgb = self.pipeline.create(dai.node.ColorCamera)
         cam_rgb.setBoardSocket(board_socket)
         cam_rgb.setResolution(resolution)
-        
-        cam_rgb.setPreviewSize(self.width, self.height) 
+
+        cam_rgb.setPreviewSize(self.width, self.height)
         cam_rgb.setInterleaved(False)
         cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
-        
-        cam_rgb.setFps(40)
+
+        cam_rgb.setFps(self.fps)
 
         xout_rgb = self.pipeline.create(dai.node.XLinkOut)
         xout_rgb.setStreamName("rgb")
@@ -77,10 +93,11 @@ class DepthAICamera(AbstractCamera):
 
         mono_left.setBoardSocket(dai.CameraBoardSocket.CAM_B)
         mono_right.setBoardSocket(dai.CameraBoardSocket.CAM_C)
-        mono_left.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-        mono_right.setResolution(dai.MonoCameraProperties.SensorResolution.THE_800_P)
-        mono_left.setFps(40)
-        mono_right.setFps(40)
+        mono_resolution = self._get_mono_resolution()
+        mono_left.setResolution(mono_resolution)
+        mono_right.setResolution(mono_resolution)
+        mono_left.setFps(self.fps)
+        mono_right.setFps(self.fps)
 
         stereo.setDefaultProfilePreset(dai.node.StereoDepth.PresetMode.HIGH_DENSITY)
         stereo.initialConfig.setConfidenceThreshold(200)
@@ -93,12 +110,25 @@ class DepthAICamera(AbstractCamera):
         mono_right.out.link(stereo.right)
         stereo.depth.link(xout_depth.input)
 
-        self.device = dai.Device(self.pipeline, dai.UsbSpeed.SUPER)
-        assert self.device.getUsbSpeed() == dai.UsbSpeed.SUPER, "DepthAI camera requires USB 3.0 connection."
-        
+        self.device = dai.Device(self.pipeline, self.device_info, dai.UsbSpeed.SUPER)
+        self.usb_speed = self.device.getUsbSpeed()
+        if self.usb_speed != dai.UsbSpeed.SUPER:
+            message = (
+                f"DepthAI camera {self.device_id} connected at USB speed "
+                f"{self.usb_speed}, not SUPER. Use a USB 3 cable/port for full bandwidth."
+            )
+            if self.require_usb3:
+                raise RuntimeError(message)
+            logger.warning("%s Continuing because require_usb3 is false.", message)
+
         self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
         self.q_depth = self.device.getOutputQueue(name="depth", maxSize=4, blocking=False)
 
+    def _get_mono_resolution(self):
+        """Return a mono resolution supported by this camera model."""
+        if self.camera_type == DAICameraType.OAK_D_LITE:
+            return dai.MonoCameraProperties.SensorResolution.THE_480_P
+        return dai.MonoCameraProperties.SensorResolution.THE_800_P
 
     def capture_frame(self) -> CameraFrame:
         """Get sensor data from the DepthAI camera.
@@ -112,7 +142,11 @@ class DepthAICamera(AbstractCamera):
 
         depth_mat = self.q_depth.get().getFrame()
         if depth_mat.shape != (self.height, self.width):
-            depth_mat = cv2.resize(depth_mat, (self.width, self.height), interpolation=cv2.INTER_NEAREST)
+            depth_mat = cv2.resize(
+                depth_mat,
+                (self.width, self.height),
+                interpolation=cv2.INTER_NEAREST,
+            )
 
         frame = CameraFrame(
             height=self.height,
@@ -136,7 +170,12 @@ class DepthAICamera(AbstractCamera):
             (frame["height"], frame["width"])
         )
 
-        depth_vis = np.nan_to_num(depth.astype(np.float32), nan=0.0, posinf=0.0, neginf=0.0)
+        depth_vis = np.nan_to_num(
+            depth.astype(np.float32),
+            nan=0.0,
+            posinf=0.0,
+            neginf=0.0,
+        )
         nonzero = depth_vis[depth_vis > 0]
         max_val = float(np.percentile(nonzero, 95)) if nonzero.size else 1.0
         max_val = max(max_val, 1e-6)
@@ -148,7 +187,6 @@ class DepthAICamera(AbstractCamera):
         cv2.imshow(f"{self.device_name} Depth", depth_color)
         cv2.waitKey(1)
 
-
     @staticmethod
     def get_devices() -> None:
         cam_list = dai.Device.getAllAvailableDevices()
@@ -158,7 +196,12 @@ class DepthAICamera(AbstractCamera):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="configs/depthai_wrist.yaml", help="Path to DepthAI camera config file.")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/depthai_wrist.yaml",
+        help="Path to DepthAI camera config file.",
+    )
     args = parser.parse_args()
     DepthAICamera.get_devices()
     with open(os.path.join(os.getcwd(), args.config), 'r') as f:
@@ -169,7 +212,9 @@ if __name__ == "__main__":
             device_id=config["device_id"],
             width=config["width"],
             height=config["height"],
-            camera_type=DAICameraType[config.get("camera_type")],
+            camera_type=DAICameraType[config.get("camera_type", "OAK_D_LITE")],
+            fps=config.get("fps", 30),
+            require_usb3=config.get("require_usb3", False),
             zlc_config=config.get("zlc_config_path", "configs/zlc.yaml"),
         )
         while True:

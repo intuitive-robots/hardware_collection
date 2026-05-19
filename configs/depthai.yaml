@@ -2,5 +2,8 @@ zlc_config_path: configs/zlc.yaml
 
 device_name: depthai_camera
 device_id: 19443010B11CEF1200
+camera_type: OAK_D_LITE
 width: 1280
 height: 640
+fps: 30
+require_usb3: false
