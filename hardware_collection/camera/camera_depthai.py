@@ -1,13 +1,18 @@
 from __future__ import annotations
+import argparse
+import enum
+import logging
 import os
 import time
-import depthai as dai  # pylint: disable=no-member
-import enum
-import yaml
-import argparse
+
 import cv2
+import depthai as dai  # pylint: disable=no-member
+import yaml
 
 from .camera import AbstractCamera, CameraFrame
+
+logger = logging.getLogger(__name__)
+
 
 class DAICameraType(enum.Enum):
     OAK_D = 0
@@ -25,12 +30,24 @@ class DepthAICamera(AbstractCamera):
         height: int = 640,
         width: int = 480,
         camera_type: DAICameraType = DAICameraType.OAK_D_LITE,
-        zlc_config: str = "configs/zlc.yaml"
+        fps: int = 30,
+        require_usb3: bool = False,
+        show_preview: bool = True,
+        zlc_config: str = "configs/zlc.yaml",
     ):
         self.camera_type = camera_type
         self.device_id = device_id
         self.name = name or f"DepthAI_{device_id}"
-        super().__init__(self.name, width, height, show_preview=True, depth=False, zlc_config=zlc_config)
+        self.fps = fps
+        self.require_usb3 = require_usb3
+        super().__init__(
+            self.name,
+            width,
+            height,
+            show_preview=show_preview,
+            depth=False,
+            zlc_config=zlc_config,
+        )
         self.initialize()
 
     def initialize(self) -> None:
@@ -49,28 +66,35 @@ class DepthAICamera(AbstractCamera):
             )
         else:
             raise ValueError("Unsupported DepthAI camera type.")
-        
-        
+
         self.device_info = dai.DeviceInfo(self.device_id)
 
         self.pipeline = dai.Pipeline()
         cam_rgb = self.pipeline.create(dai.node.ColorCamera)
         cam_rgb.setBoardSocket(board_socket)
         cam_rgb.setResolution(resolution)
-        
-        cam_rgb.setPreviewSize(self.width, self.height) 
+
+        cam_rgb.setPreviewSize(self.width, self.height)
         cam_rgb.setInterleaved(False)
         cam_rgb.setColorOrder(dai.ColorCameraProperties.ColorOrder.RGB)
-        
-        cam_rgb.setFps(40)
+
+        cam_rgb.setFps(self.fps)
 
         xout_rgb = self.pipeline.create(dai.node.XLinkOut)
         xout_rgb.setStreamName("rgb")
         cam_rgb.preview.link(xout_rgb.input)
 
-        self.device = dai.Device(self.pipeline, dai.UsbSpeed.SUPER)
-        assert self.device.getUsbSpeed() == dai.UsbSpeed.SUPER, "DepthAI camera requires USB 3.0 connection."
-        
+        self.device = dai.Device(self.pipeline, self.device_info, dai.UsbSpeed.SUPER)
+        self.usb_speed = self.device.getUsbSpeed()
+        if self.usb_speed != dai.UsbSpeed.SUPER:
+            message = (
+                f"DepthAI camera {self.device_id} connected at USB speed "
+                f"{self.usb_speed}, not SUPER. Use a USB 3 cable/port for full bandwidth."
+            )
+            if self.require_usb3:
+                raise RuntimeError(message)
+            logger.warning("%s Continuing because require_usb3 is false.", message)
+
         self.q_rgb = self.device.getOutputQueue(name="rgb", maxSize=4, blocking=False)
 
 
@@ -109,15 +133,23 @@ if __name__ == "__main__":
     DepthAICamera.get_devices()
     with open(os.path.join(os.getcwd(), args.config), 'r') as f:
         config = yaml.load(f, Loader=yaml.SafeLoader)
+    depthai_camera = None
     try:
         depthai_camera = DepthAICamera(
             config["device_name"],
             device_id=config["device_id"],
             width=config["width"],
             height=config["height"],
-            camera_type=DAICameraType[config.get("camera_type")]
+            camera_type=DAICameraType[config.get("camera_type", "OAK_D_LITE")],
+            fps=config.get("fps", 30),
+            require_usb3=config.get("require_usb3", False),
+            show_preview=config.get("show_preview", True),
+            zlc_config=config.get("zlc_config_path", "configs/zlc.yaml"),
         )
         while True:
             depthai_camera.publish_frame()
     except KeyboardInterrupt:
         print("Exiting...")
+    finally:
+        if depthai_camera is not None and depthai_camera.show_preview:
+            cv2.destroyAllWindows()

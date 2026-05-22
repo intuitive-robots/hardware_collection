@@ -4,3 +4,6 @@ device_id:  1844301051D9B50F00 #19443010B11CEF1200
 camera_type: OAK_D_LITE
 width: 1280
 height: 640
+fps: 30
+require_usb3: false
+show_preview: true
