@@ -1,0 +1,10 @@
+device_id: "10905471"
+depth_mode: "NEURAL" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
+publish_topic: zed_depth
+width: 1280 #1280 672
+height: 720 #720 376
+fps: 15
+show_preview: true
+log_interval: 100
+zlc_config: "/home/jjiang/hardware_collection/configs/zlc.yaml"
+optional_settings_path: "/home/jjiang/.config/zed/settings/"

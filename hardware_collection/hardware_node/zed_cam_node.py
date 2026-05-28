@@ -96,6 +96,7 @@ def main() -> int:
                 show_preview=bool(cfg["show_preview"]),
                 publish_topic=cfg["publish_topic"],
                 zlc_config=str(cfg["zlc_config"]),
+                optional_settings_path=cfg.get("optional_settings_path"),
             )
     pyzlc.info(f"Initialized ZED camera with device name {cfg['publish_topic']}")
     pyzlc.info("[ZEDCamNode] Camera publisher started")

@@ -8,6 +8,7 @@ estimates the fixed transform between robot base and camera.
 from __future__ import annotations
 
 import argparse
+from configparser import ConfigParser
 import json
 import signal
 import sys
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import cv2
+import msgpack
 import numpy as np
 import pyzlc
 import yaml
@@ -25,14 +27,24 @@ if __package__ is None or __package__ == "":
 
 from hardware_collection.hardware_node.wrist_cam_hand_eye_calibration_node import (
     WristCamHandEyeCalibrator,
+    as_float_array,
     invert_transform,
-    load_camera_model,
     load_zlc_config,
     msg_value,
+    pose_to_transform,
+    quaternion_to_rotation,
     rotation_delta_deg,
     try_collect_stable_sample,
     transform_to_dict,
 )
+
+
+ZED_CALIBRATION_SECTIONS = {
+    (2208, 1242): "LEFT_CAM_2K",
+    (1920, 1080): "LEFT_CAM_FHD",
+    (1280, 720): "LEFT_CAM_HD",
+    (672, 376): "LEFT_CAM_VGA",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,24 +59,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--camera-topic",
         type=str,
-        default="static_cam",
-        help="Fixed external camera frame topic. Defaults to configs/depthai_static.yaml device_name.",
+        default="zed_depth",
+        help="Fixed external camera frame topic. Defaults to the ZED depth camera topic.",
     )
     parser.add_argument(
         "--pose-topic",
         type=str,
-        default="robot/eef_pose",
+        default="FrankaPanda/franka_arm_state",
         help=(
-            "Topic publishing end-effector pose as a 4x4 matrix, position/quaternion, "
-            "translation plus rotation matrix, or EE_pos/EE_quat."
+            "Topic publishing Panda arm state. Defaults to FrankaPanda/franka_arm_state "
+            "and accepts O_T_EE or EE_pos/EE_quat."
         ),
     )
     parser.add_argument("--output", type=Path, default=Path("data/calibration/eye_to_hand.yaml"))
     parser.add_argument(
         "--camera-info",
         type=Path,
-        default=None,
-        help="Optional YAML containing fx, fy, cx, cy and optional distortion coefficients.",
+        default=Path("/home/jjiang/.config/zed/settings/SN10905471.conf"),
+        help="YAML containing fx, fy, cx, cy, or a ZED SN*.conf calibration file.",
+    )
+    parser.add_argument(
+        "--camera-width",
+        type=int,
+        default=1280,
+        help="Camera image width used to select the ZED calibration section.",
+    )
+    parser.add_argument(
+        "--camera-height",
+        type=int,
+        default=720,
+        help="Camera image height used to select the ZED calibration section.",
     )
     parser.add_argument("--fx", type=float, default=None)
     parser.add_argument("--fy", type=float, default=None)
@@ -130,6 +154,131 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
+def load_zed_conf_camera_model(path: Path, width: int, height: int) -> dict[str, Any]:
+    section = ZED_CALIBRATION_SECTIONS.get((int(width), int(height)))
+    if section is None:
+        supported = ", ".join(f"{w}x{h}" for w, h in ZED_CALIBRATION_SECTIONS)
+        raise ValueError(
+            f"No ZED calibration section mapping for {width}x{height}. "
+            f"Supported resolutions: {supported}"
+        )
+
+    parser = ConfigParser()
+    parser.optionxform = str.lower
+    if not parser.read(path):
+        raise FileNotFoundError(f"Could not read ZED calibration file: {path}")
+    if section not in parser:
+        raise ValueError(f"Missing section [{section}] in {path}")
+
+    cam = parser[section]
+    return {
+        "fx": float(cam["fx"]),
+        "fy": float(cam["fy"]),
+        "cx": float(cam["cx"]),
+        "cy": float(cam["cy"]),
+        "dist_coeffs": [
+            float(cam.get("k1", 0.0)),
+            float(cam.get("k2", 0.0)),
+            float(cam.get("k3", 0.0)),
+            float(cam.get("k4", 0.0)),
+        ],
+        "calibration_file": str(path),
+        "calibration_section": section,
+    }
+
+
+def load_camera_model(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray]:
+    camera_info: dict[str, Any] = {}
+    if args.camera_info is not None:
+        if args.camera_info.suffix.lower() == ".conf":
+            camera_info = load_zed_conf_camera_model(
+                args.camera_info,
+                args.camera_width,
+                args.camera_height,
+            )
+        else:
+            with args.camera_info.open("r", encoding="utf-8") as f:
+                camera_info = yaml.safe_load(f) or {}
+
+    fx = args.fx if args.fx is not None else camera_info.get("fx")
+    fy = args.fy if args.fy is not None else camera_info.get("fy")
+    cx = args.cx if args.cx is not None else camera_info.get("cx")
+    cy = args.cy if args.cy is not None else camera_info.get("cy")
+    missing = [name for name, value in (("fx", fx), ("fy", fy), ("cx", cx), ("cy", cy)) if value is None]
+    if missing:
+        raise ValueError(
+            "Missing camera intrinsics: "
+            + ", ".join(missing)
+            + ". Provide --camera-info or --fx --fy --cx --cy."
+        )
+
+    dist_coeffs = args.dist_coeffs
+    if dist_coeffs is None:
+        dist_coeffs = camera_info.get("dist_coeffs", camera_info.get("distortion", [0, 0, 0, 0, 0]))
+
+    camera_matrix = np.array(
+        [[float(fx), 0.0, float(cx)], [0.0, float(fy), float(cy)], [0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    return camera_matrix, as_float_array(dist_coeffs).reshape(-1, 1)
+
+
+def decode_panda_arm_state(message: Any) -> dict[Any, Any]:
+    if isinstance(message, (bytes, bytearray)):
+        return msgpack.unpackb(message, raw=False)
+    if isinstance(message, dict):
+        return message
+    raise TypeError(f"Unsupported Panda arm state message type: {type(message).__name__}")
+
+
+def comparable_epoch_timestamp(state: dict[Any, Any]) -> float | None:
+    timestamp = msg_value(state, "timestamp", None)
+    if timestamp is not None:
+        timestamp_s = float(timestamp)
+        if timestamp_s > 1e9:
+            return timestamp_s
+
+    time_ms = msg_value(state, "time_ms", None)
+    if time_ms is not None:
+        timestamp_s = float(time_ms) * 1e-3
+        if timestamp_s > 1e9:
+            return timestamp_s
+
+    return None
+
+
+def panda_arm_state_to_transform(message: Any) -> tuple[np.ndarray, float | None]:
+    state = decode_panda_arm_state(message)
+    timestamp = comparable_epoch_timestamp(state)
+
+    o_t_ee = msg_value(state, "O_T_EE", None)
+    if o_t_ee is not None:
+        # Franka state matrices are conventionally flattened in column-major order.
+        transform = as_float_array(o_t_ee, (4, 4)).T
+        return transform, timestamp
+
+    ee_pos = msg_value(state, "EE_pos", None)
+    if ee_pos is None:
+        return pose_to_transform(state)
+
+    ee_quat = msg_value(state, "EE_quat", None)
+    ee_rot = msg_value(state, "EE_rot", None)
+    if ee_rot is None:
+        ee_rot = msg_value(state, "O_R_EE", None)
+    if ee_quat is None and ee_rot is None:
+        raise ValueError(
+            "Panda arm state has EE_pos but no orientation. Need O_T_EE, EE_quat, "
+            "EE_rot, or O_R_EE for hand-eye calibration."
+        )
+
+    transform = np.eye(4, dtype=np.float64)
+    transform[:3, 3] = as_float_array(ee_pos, (3,))
+    transform[:3, :3] = (
+        as_float_array(ee_rot, (3, 3)) if ee_rot is not None else quaternion_to_rotation(ee_quat)
+    )
+    return transform, timestamp
+
+
 def make_transform(rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
     transform = np.eye(4, dtype=np.float64)
     transform[:3, :3] = rotation
@@ -154,12 +303,23 @@ def average_transforms(transforms: list[np.ndarray]) -> np.ndarray:
     return averaged
 
 
+def beep() -> None:
+    sys.stdout.write("\a")
+    sys.stdout.flush()
+
+
 class EyeToHandCalibrator(WristCamHandEyeCalibrator):
     def connect(self) -> None:
         pyzlc.register_subscriber_handler(self.wrist_topic, self._handle_frame)
         pyzlc.register_subscriber_handler(self.pose_topic, self._handle_pose)
         pyzlc.info("Subscribed to fixed camera topic '%s'", self.wrist_topic)
         pyzlc.info("Subscribed to end-effector pose topic '%s'", self.pose_topic)
+
+    def _handle_pose(self, pose: Any) -> None:
+        try:
+            self.latest_pose = panda_arm_state_to_transform(pose)
+        except Exception as exc:  # pragma: no cover - runtime feedback only
+            pyzlc.error("Ignoring invalid Panda arm state message: %s", exc)
 
     def solve_eye_to_hand(self, method_name: str) -> tuple[np.ndarray, np.ndarray, dict[str, float]]:
         method_map = {
@@ -327,6 +487,7 @@ def main() -> int:
             pending_detection_time = None
             pyzlc.info("Chessboard not detected")
             continue
+        beep()
 
         if pending_detection_time is None:
             pending_detection_time = now

@@ -40,11 +40,13 @@ class ZED(AbstractCamera):
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
         zlc_config: Optional[str] = None,
+        optional_settings_path: Optional[str] = None,
     ) -> None:
         self.device_id = str(device_id)
         self.name = name or f"ZED_{self.device_id}"
         self.fps = fps
         self.depth_mode = depth_mode.upper()
+        self.optional_settings_path = optional_settings_path
         self.depth_enabled = self.depth_mode != "NONE"
         self._sl = None
         self.zed = None
@@ -97,6 +99,8 @@ class ZED(AbstractCamera):
         init_params.depth_mode = self._get_depth_mode()
         init_params.coordinate_units = self._sl.UNIT.MILLIMETER
         init_params.camera_resolution = self._select_resolution(init_params)
+        if self.optional_settings_path:
+            init_params.optional_settings_path = str(self.optional_settings_path)
 
         err = self.zed.open(init_params)
         if err != self._sl.ERROR_CODE.SUCCESS:
