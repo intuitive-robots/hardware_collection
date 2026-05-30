@@ -139,6 +139,7 @@ class DepthAICamera(AbstractCamera):
         rgb_raw = self.q_rgb.get().getRaw()
         rgb_mat = rgb_raw.data.reshape((3, self.height, self.width))
         rgb_mat = rgb_mat.transpose(1, 2, 0)
+        rgb_mat = cv2.cvtColor(rgb_mat, cv2.COLOR_RGB2BGR)
 
         depth_mat = self.q_depth.get().getFrame()
         if depth_mat.shape != (self.height, self.width):
