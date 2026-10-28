@@ -16,44 +16,75 @@ class Args:
     node_name: str = "gello"
     ip: str = "192.168.1.1"
     hardware_port: str = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0" #check the actual config
-    state_pub_rate_hz: int = 1000
+    baudrate: int = 1000000
+    """Preferred Dynamixel bus baudrate; the driver falls back to the rate the servos answer on
+    (57600 until scripts/gello_set_baudrate.py was run)."""
+    velocity_cutoff_hz: float = 10.0
+    """Low-pass cutoff of the finite-difference joint velocity sent as feed-forward."""
+    poll_period_s: float = 0.0005
+    """How often to check the driver for a new bus read."""
 
 
 class GelloNode:
-   
-    def __init__(self, name: str, agent: GelloAgent, state_pub_rate_hz: int = 50,):
+    """Publishes one message per new Dynamixel bus read (not per loop iteration)."""
+
+    def __init__(self, name: str, agent: GelloAgent, velocity_cutoff_hz: float = 10.0):
         self._name = name
         self._agent = agent
-        self._state_dt_s = int(1 / max(1, state_pub_rate_hz))
+        self._velocity_cutoff_hz = velocity_cutoff_hz
         self._stop_event = threading.Event()
         self._state_thread: Optional[threading.Thread] = None
+        self._last_count = 0
+        self._last_pos: Optional[np.ndarray] = None
+        self._last_stamp = 0.0
+        self._velocity: Optional[np.ndarray] = None
 
         self._arm_state_pub = pyzlc.Publisher(f"{name}/gello_arm_state")
         pyzlc.info(f"[GelloNode] Initialized publishers for '{name}'/gello_arm_state")
         self._gripper_state_pub = pyzlc.Publisher(f"{name}/gello_gripper_state")
         pyzlc.info(f"[GelloNode] Initialized publishers for '{name}'/gello_gripper_state")
-    def _build_arm_state(self) -> Dict[str, List[float]]:
-        joints_arr = np.asarray(self._agent._robot.get_joint_state()[:-1], dtype=float).reshape(-1)
-        return {"joint_state": joints_arr.tolist()}
 
-    def _build_gripper_state(self) -> Dict[str, float]:
-        gripper = float(np.asarray(self._agent._robot.get_joint_state()[-1], dtype=float))
-        return {"gripper": gripper}
+    def poll(self) -> bool:
+        """Publish the latest bus read if it is new. Returns True if something was published."""
+        state, stamp, count = self._agent._robot.get_joint_state_stamped()
+        if count == self._last_count:
+            return False
+        self._last_count = count
+        joints = np.asarray(state[:-1], dtype=float)
+
+        # finite difference between bus reads, low-passed against encoder quantization noise
+        if self._last_pos is None or stamp <= self._last_stamp:
+            self._velocity = np.zeros_like(joints)
+        else:
+            dt = stamp - self._last_stamp
+            raw = (joints - self._last_pos) / dt
+            a = 1.0 - np.exp(-2 * np.pi * self._velocity_cutoff_hz * dt)
+            self._velocity = self._velocity + a * (raw - self._velocity)
+        self._last_pos, self._last_stamp = joints, stamp
+
+        self._arm_state_pub.publish(self._build_arm_state(joints, stamp, count))
+        self._gripper_state_pub.publish({"gripper": float(state[-1])})
+        return True
+
+    def _build_arm_state(self, joints: np.ndarray, stamp: float, count: int) -> Dict[str, List[float]]:
+        return {
+            "joint_state": joints.tolist(),
+            "joint_velocity": self._velocity.tolist(),
+            # monotonic time of the bus read on the GELLO host and a running sample number
+            "stamp": stamp,
+            "seq": count,
+        }
 
 def main():
     args = tyro.cli(Args)
     pyzlc.init(args.node_name, args.ip, group_name="DroidGroup",group_port=7730)
-    agent = GelloAgent(port=args.hardware_port)
-    gello_node = GelloNode(args.node_name, agent,
-                        state_pub_rate_hz=args.state_pub_rate_hz)
+    agent = GelloAgent(port=args.hardware_port, baudrate=args.baudrate)
+    gello_node = GelloNode(args.node_name, agent, velocity_cutoff_hz=args.velocity_cutoff_hz)
     pyzlc.info(f"[GelloNode] ZeroLanCom node '{args.node_name}' started on {args.ip}")
     try:
         while True:
-            arm_state = gello_node._build_arm_state()
-            gripper_state = gello_node._build_gripper_state()
-            gello_node._arm_state_pub.publish(arm_state)
-            gello_node._gripper_state_pub.publish(gripper_state)
-            pyzlc.sleep(gello_node._state_dt_s)
+            if not gello_node.poll():
+                pyzlc.sleep(args.poll_period_s)
     except Exception as exc:  # pragma: no cover - runtime feedback only
         pyzlc.error("Publisher stopped due to error: %s", exc)
         return 1

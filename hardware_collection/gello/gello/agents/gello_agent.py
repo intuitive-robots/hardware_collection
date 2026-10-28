@@ -33,7 +33,10 @@ class DynamixelRobotConfig:
         assert len(self.joint_ids) == len(self.joint_signs)
 
     def make_robot(
-        self, port: str = "/dev/ttyUSB0", start_joints: Optional[np.ndarray] = None
+        self,
+        port: str = "/dev/ttyUSB0",
+        start_joints: Optional[np.ndarray] = None,
+        baudrate: int = 57600,
     ) -> DynamixelRobot:
         return DynamixelRobot(
             joint_ids=self.joint_ids,
@@ -41,6 +44,7 @@ class DynamixelRobotConfig:
             real=True,
             joint_signs=list(self.joint_signs),
             port=port,
+            baudrate=baudrate,
             gripper_config=self.gripper_config,
             start_joints=start_joints,
         )
@@ -66,16 +70,17 @@ class GelloAgent(Agent):
         port: str,
         dynamixel_config: Optional[DynamixelRobotConfig] = None,
         start_joints: Optional[np.ndarray] = None,
+        baudrate: int = 57600,
     ):
         if dynamixel_config is not None:
             self._robot = dynamixel_config.make_robot(
-                port=port, start_joints=start_joints
+                port=port, start_joints=start_joints, baudrate=baudrate
             )
         else:
             assert Path(port).exists(), port
 
             config = load_config(port)
-            self._robot = config.make_robot(port=port, start_joints=start_joints)
+            self._robot = config.make_robot(port=port, start_joints=start_joints, baudrate=baudrate)
 
     # This function is a leftover from the original source but at the moment it is not possible to control Gello's joints
     def act(self, obs: Dict[str, np.ndarray]) -> np.ndarray:

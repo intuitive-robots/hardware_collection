@@ -1,3 +1,4 @@
+import os
 import time
 from threading import Event, Lock, Thread
 from typing import Protocol, Sequence
@@ -21,6 +22,8 @@ ADDR_GOAL_POSITION = 116
 LEN_GOAL_POSITION = 4
 ADDR_PRESENT_POSITION = 132
 LEN_PRESENT_POSITION = 4
+# tried after the requested baudrate when the servos do not answer (GELLO default is 57600)
+FALLBACK_BAUDRATES = (1000000, 57600, 2000000, 3000000, 4000000, 115200)
 TORQUE_ENABLE = 1
 TORQUE_DISABLE = 0
 
@@ -103,6 +106,9 @@ class DynamixelDriver(DynamixelDriverProtocol):
         """
         self._ids = ids
         self._joint_angles = None
+        # (raw angles, monotonic read time, read count) of the latest bus read, swapped as one object
+        self._sample = None
+        self._sample_count = 0
         self._lock = Lock()
 
         # Initialize the port handler, packet handler, and group sync read/write
@@ -125,8 +131,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
         if not self._portHandler.openPort():
             raise RuntimeError("Failed to open the port")
 
-        if not self._portHandler.setBaudRate(baudrate):
-            raise RuntimeError(f"Failed to change the baudrate, {baudrate}")
+        self.baudrate = self._find_baudrate(baudrate)
+        self._set_low_latency(port)
 
         # Add parameters for each Dynamixel servo to the group sync read
         for dxl_id in self._ids:
@@ -182,6 +188,42 @@ class DynamixelDriver(DynamixelDriverProtocol):
         # Clear syncwrite parameter storage
         self._groupSyncWrite.clearParam()
 
+    def _find_baudrate(self, preferred: int) -> int:
+        """Open the bus at the baudrate the servos answer on, trying `preferred` first.
+
+        The servo baudrate is stored in their EEPROM (see scripts/gello_set_baudrate.py), so
+        callers do not need to know whether the GELLO was switched from 57600 to 1 Mbps.
+        """
+        for baud in [preferred] + [b for b in FALLBACK_BAUDRATES if b != preferred]:
+            if not self._portHandler.setBaudRate(baud):
+                raise RuntimeError(f"Failed to change the baudrate, {baud}")
+            _, res, err = self._packetHandler.ping(self._portHandler, self._ids[0])
+            if res == COMM_SUCCESS and err == 0:
+                if baud != preferred:
+                    print(f"Dynamixel ID {self._ids[0]} answers at {baud} baud (not {preferred}), using {baud}")
+                return baud
+        raise RuntimeError(f"Dynamixel ID {self._ids[0]} does not answer at any of {[preferred, *FALLBACK_BAUDRATES]}")
+
+    def _set_low_latency(self, port: str) -> None:
+        """Drop the FTDI latency timer from 16 ms to 1 ms.
+
+        With the default 16 ms every bus read waits for the USB adapter to flush, which limits
+        GELLO to ~20 samples/s. The low_latency serial flag makes ftdi_sio use 1 ms; unlike
+        writing /sys/.../latency_timer or a udev rule this works as normal user inside the
+        container. It holds until the adapter is re-plugged, so it is set on every open.
+        """
+        try:
+            self._portHandler.ser.set_low_latency_mode(True)
+        except Exception as e:  # not a Linux tty or driver without support
+            print(f"warning: could not set low latency mode on {port}: {e}")
+            return
+        tty = os.path.basename(os.path.realpath(port))
+        try:
+            with open(f"/sys/bus/usb-serial/devices/{tty}/latency_timer") as f:
+                print(f"{port}: FTDI latency timer {f.read().strip()} ms")
+        except OSError:
+            pass
+
     def torque_enabled(self) -> bool:
         return self._torque_enabled
 
@@ -230,6 +272,8 @@ class DynamixelDriver(DynamixelDriverProtocol):
                             f"Failed to get joint angles for Dynamixel with ID {dxl_id}"
                         )
                 self._joint_angles = _joint_angles
+                self._sample_count += 1
+                self._sample = (_joint_angles, time.monotonic(), self._sample_count)
             # self._groupSyncRead.clearParam() # TODO what does this do? should i add it
 
     def get_joints(self) -> np.ndarray:
@@ -239,6 +283,13 @@ class DynamixelDriver(DynamixelDriverProtocol):
         # with self._lock:
         _j = self._joint_angles.copy()
         return _j / 2048.0 * np.pi
+
+    def get_joints_stamped(self) -> tuple[np.ndarray, float, int]:
+        """Latest joint angles [rad] with the monotonic time and running count of their bus read."""
+        while self._sample is None:
+            time.sleep(0.01)
+        angles, stamp, count = self._sample
+        return angles / 2048.0 * np.pi, stamp, count
 
     def close(self):
         self._stop_thread.set()
