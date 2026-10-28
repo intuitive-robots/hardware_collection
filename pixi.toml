@@ -1,0 +1,40 @@
+# hardware_collection (ZED cameras, GELLO) - replaces conda env `hw_collect`
+[workspace]
+name = "hardware_collection"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+[dependencies]
+python = "3.12.*"
+# X11/GL runtime libs for the GUI opencv-python wheel (camera previews)
+libxcb = "*"
+libgl = "*"
+libglib = "*"
+xorg-libsm = "*"
+xorg-libice = "*"
+xorg-libxext = "*"
+
+[pypi-dependencies]
+hardware_collection = { path = ".", editable = true }
+pyzlc = "*"
+pyyaml = ">=6.0"
+numpy = ">=1.21.0"
+opencv-python = ">=4.5.0,<5"
+depthai = ">=2.20.0"
+keyboard = ">=0.13.5"
+pyserial = "*"
+tyro = "*"
+pytest = ">=8.3.5"
+# ZED Python API (not on PyPI); the wheel links against the ZED SDK in the container (/usr/local/zed),
+# so its major.minor must match ZED_SDK_VERSION in .devcontainer/Dockerfile
+pyzed = { url = "https://download.stereolabs.com/zedsdk/5.2/whl/linux_x86_64/pyzed-5.2-cp312-cp312-linux_x86_64.whl" }
+
+[tasks]
+zed-left = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_left_cam.yaml"
+zed-right = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_right_cam.yaml"
+zed-wrist = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_wrist_cam.yaml"
+
+gello-offset = "python hardware_collection/gello/scripts/gello_get_offset.py --start-joints 0 0 0 -2.15 0 2.15 0 --joint-signs 1 -1 1 1 1 1 1 --port /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0"
+gello = "python hardware_collection/hardware_node/gello_node.py"
+# one-time: switch the GELLO servos (EEPROM) from 57600 to 1 Mbps; stop the gello node first. Undo: --from-baud 1000000 --to-baud 57600
+gello-set-baud = "python hardware_collection/gello/scripts/gello_set_baudrate.py --port /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0"

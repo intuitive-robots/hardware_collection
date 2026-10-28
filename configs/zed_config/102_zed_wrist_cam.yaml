@@ -7,4 +7,4 @@ height: 376 #720 376
 fps: 60
 show_preview: false
 log_interval: 100
-zlc_config: "/home/irl-admin/LZY/hardware_collection/configs/zlc.yaml"
+zlc_config: "configs/zlc.yaml"
