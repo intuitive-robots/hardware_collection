@@ -1,0 +1,17 @@
+#wrist camera config for the PCIe insertion dataset: square crop instead of resizing
+# device_id: "11450270"
+device_id: "17084586"
+depth_mode: "NEURAL_LIGHT" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
+publish_topic: zed_wrist
+width: 672 #1280 672
+height: 376 #720 376
+fps: 60
+show_preview: false
+log_interval: 100
+zlc_config: "configs/zlc.yaml"
+# (x, y, w, h) of the square of the full height, 48 px right of center
+crop: [196, 0, 376, 376]
+
+# right lens image of the stereo pair on a second topic, square of the full height, left-aligned
+right_publish_topic: zed_wrist_right
+right_crop: [0, 0, 376, 376]

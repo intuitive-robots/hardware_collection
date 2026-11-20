@@ -33,6 +33,10 @@ pyzed = { url = "https://download.stereolabs.com/zedsdk/5.2/whl/linux_x86_64/pyz
 zed-left = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_left_cam.yaml"
 zed-right = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_right_cam.yaml"
 zed-wrist = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/102_zed_wrist_cam.yaml"
+# PCIe insertion dataset: square crops instead of resizing (configs/zed_config/pcie_*)
+zed-left-pcie = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/pcie_zed_left_cam.yaml"
+zed-right-pcie = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/pcie_zed_right_cam.yaml"
+zed-wrist-pcie = "python hardware_collection/hardware_node/zed_cam_node.py --config configs/zed_config/pcie_zed_wrist_cam.yaml"
 
 gello-offset = "python hardware_collection/gello/scripts/gello_get_offset.py --start-joints 0 0 0 -2.15 0 2.15 0 --joint-signs 1 -1 1 1 1 1 1 --port /dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EVRT-if00-port0"
 gello = "python hardware_collection/hardware_node/gello_node.py"

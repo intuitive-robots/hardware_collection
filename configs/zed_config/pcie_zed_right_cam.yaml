@@ -1,0 +1,12 @@
+#right camera config for the PCIe insertion dataset: square crop instead of resizing
+device_id: "33271979"
+depth_mode: "NEURAL_LIGHT" #NEURAL, NEURAL_LIGHT can not get depth but can run in WVGA at 100fps
+publish_topic: zed_right
+width: 672 #672 #1280
+height: 376 #376 #720
+fps: 60 #60
+show_preview: false
+log_interval: 100
+zlc_config: "configs/zlc.yaml"
+# (x, y, w, h) of a 256 square (the dataset size, so no upscaling), top-aligned, 48 px left of center
+crop: [160, 0, 256, 256]

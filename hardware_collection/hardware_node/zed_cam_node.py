@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import argparse
 from json import load
 import logging
@@ -96,6 +97,9 @@ def main() -> int:
                 show_preview=bool(cfg["show_preview"]),
                 publish_topic=cfg["publish_topic"],
                 zlc_config=str(cfg["zlc_config"]),
+                crop=cfg.get("crop"),
+                right_publish_topic=cfg.get("right_publish_topic"),
+                right_crop=cfg.get("right_crop"),
             )
     pyzlc.info(f"Initialized ZED camera with device name {cfg['publish_topic']}")
     pyzlc.info("[ZEDCamNode] Camera publisher started")
@@ -122,8 +126,8 @@ def main() -> int:
         camera.close()
         time.sleep(1)  # Ensure all resources are cleaned up before exit
         pyzlc.info("ZED camera publisher exiting")
-        return 0
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -3,16 +3,42 @@ from __future__ import annotations
 import logging
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 import cv2
 import numpy as np
+import pyzlc
 import yaml
 
 from .camera import AbstractCamera, CameraFrame
 
 
 logger = logging.getLogger(__name__)
+
+
+def _crop_slices(crop: Optional[Sequence[int]], width: int, height: int):
+    """(x, y, w, h) -> (rows, cols) slices, None for no crop."""
+    if crop is None:
+        return None
+    x, y, w, h = (int(v) for v in crop)
+    if x < 0 or y < 0 or w <= 0 or h <= 0 or x + w > width or y + h > height:
+        raise ValueError(f"crop {crop} does not fit in {width}x{height}")
+    return slice(y, y + h), slice(x, x + w)
+
+
+def _rgb_frame(bgra: np.ndarray, crop, timestamp: float, depth_bytes: Optional[bytes] = None) -> CameraFrame:
+    bgr = bgra[:, :, :3]
+    if crop is not None:
+        bgr = bgr[crop]
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return {
+        "timestamp": timestamp,
+        "width": int(rgb.shape[1]),
+        "height": int(rgb.shape[0]),
+        "channels": int(rgb.shape[2]),
+        "rgb_data": rgb.tobytes(),
+        "depth_data": depth_bytes,
+    }
 
 
 class ZED(AbstractCamera):
@@ -40,8 +66,18 @@ class ZED(AbstractCamera):
         depth_mode: str = "PERFORMANCE",
         show_preview: bool = False,
         zlc_config: Optional[str] = None,
+        crop: Optional[Sequence[int]] = None,  # (x, y, w, h) in pixels of the captured image
+        # also publish the right lens image (RGB only) on this topic, cropped with right_crop
+        right_publish_topic: Optional[str] = None,
+        right_crop: Optional[Sequence[int]] = None,
     ) -> None:
         self.device_id = str(device_id)
+        self.crop = _crop_slices(crop, width, height)
+        self.right_crop = _crop_slices(right_crop, width, height)
+        self.right_publish_topic = right_publish_topic
+        self.right_publisher = None
+        self.image_right = None
+        self._right_frame: Optional[CameraFrame] = None
         self.name = name or f"ZED_{self.device_id}"
         self.fps = fps
         self.depth_mode = depth_mode.upper()
@@ -65,6 +101,8 @@ class ZED(AbstractCamera):
             depth=self.depth_enabled,
             zlc_config=zlc_config,
         )
+        if right_publish_topic:
+            self.right_publisher = pyzlc.Publisher(right_publish_topic)
         self.initialize()
 
     @staticmethod
@@ -105,6 +143,7 @@ class ZED(AbstractCamera):
         self.runtime_parameters = self._sl.RuntimeParameters()
         self.image = self._sl.Mat()
         self.depth = self._sl.Mat()
+        self.image_right = self._sl.Mat()
         logger.info("ZED camera %s connected successfully", self.device_id)
 
     def _select_resolution(self, init_params):
@@ -138,24 +177,26 @@ class ZED(AbstractCamera):
 
         timestamp = time.time()
         self.zed.retrieve_image(self.image, self._sl.VIEW.LEFT)  # bgra
-        bgr = self.image.get_data()[:, :, :3]  # Remove alpha channel if present
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        if self.right_publisher is not None:
+            self.zed.retrieve_image(self.image_right, self._sl.VIEW.RIGHT)
+            self._right_frame = _rgb_frame(self.image_right.get_data(), self.right_crop, timestamp)
 
         depth_bytes = None
         if self.depth_enabled:
             self.zed.retrieve_measure(self.depth, self._sl.MEASURE.DEPTH)
-            depth_arr = self.depth.get_data().copy()
+            depth_arr = self.depth.get_data()
+            if self.crop is not None:
+                depth_arr = depth_arr[self.crop]
+            depth_arr = depth_arr.copy()
             self.latest_depth = depth_arr
             depth_bytes = depth_arr.astype(np.float32, copy=False).tobytes()
 
-        return {
-            "timestamp": timestamp,
-            "width": int(rgb.shape[1]),
-            "height": int(rgb.shape[0]),
-            "channels": int(rgb.shape[2]),
-            "rgb_data": rgb.tobytes(),
-            "depth_data": depth_bytes,
-        }
+        return _rgb_frame(self.image.get_data(), self.crop, timestamp, depth_bytes)
+
+    def publish_frame(self) -> None:
+        super().publish_frame()
+        if self.right_publisher is not None:
+            self.right_publisher.publish(self._right_frame)
 
     def capture_image(self) -> CameraFrame:
         return self.capture_frame()
